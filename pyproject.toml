@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "joyai-image-release"
+version = "0.1.0"
+description = "Package for JoyAI-Image image inference."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "accelerate",
+    "diffusers>=0.34.0",
+    "einops",
+    "loguru",
+    "packaging",
+    "pillow",
+    "safetensors",
+    "sentencepiece",
+    "torch",
+    "torchvision",
+    "transformers>=4.57.0,<4.58.0",
+]
+
+[project.optional-dependencies]
+flash-attn = ["flash-attn>=2.8.0"]
+rewrite = ["openai"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
