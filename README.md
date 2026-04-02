@@ -7,8 +7,6 @@
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Checkpoint-JoyAI--Image--Edit-yellow)](https://huggingface.co/jdopensource/JoyAI-Image-Edit)&#160;
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Welcome to the official project page for **JoyAI-Image**.
-
 </div>
 
 ## 🔥🔥🔥 News!!
@@ -94,6 +92,19 @@ python inference_und.py \
   --max-new-tokens 1024
 ```
 
+#### CLI Reference (`inference_und.py`)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--ckpt-root` | str | *required* | Checkpoint root containing `text_encoder/` |
+| `--image` | str | *required* | Input image path, or comma-separated paths for multiple images |
+| `--prompt` | str | `"Describe this image in detail."` | User question or instruction. When omitted, defaults to image captioning |
+| `--max-new-tokens` | int | 2048 | Maximum number of tokens to generate |
+| `--temperature` | float | 0.7 | Sampling temperature. Use `0` for greedy decoding |
+| `--top-p` | float | 0.8 | Top-p (nucleus) sampling threshold |
+| `--top-k` | int | 50 | Top-k sampling threshold |
+| `--output` | str | None | Optional output file to save the response text |
+
 #### Image Editing
 
 ```bash
@@ -108,9 +119,7 @@ python inference.py \
   --basesize 1024
 ```
 
----
-
-### CLI Reference (`inference.py`)
+#### CLI Reference (`inference.py`)
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -128,18 +137,7 @@ python inference.py \
 | `--rewrite-model` | str | `gpt-5` | Model name for prompt rewriting |
 | `--hsdp-shard-dim` | int | 1 | FSDP shard dimension for multi-GPU (set to GPU count) |
 
-### CLI Reference (`inference_und.py`)
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--ckpt-root` | str | *required* | Checkpoint root containing `text_encoder/` |
-| `--image` | str | *required* | Input image path, or comma-separated paths for multiple images |
-| `--prompt` | str | `"Describe this image in detail."` | User question or instruction. When omitted, defaults to image captioning |
-| `--max-new-tokens` | int | 2048 | Maximum number of tokens to generate |
-| `--temperature` | float | 0.7 | Sampling temperature. Use `0` for greedy decoding |
-| `--top-p` | float | 0.8 | Top-p (nucleus) sampling threshold |
-| `--top-k` | int | 50 | Top-k sampling threshold |
-| `--output` | str | None | Optional output file to save the response text |
+---
 
 ### Spatial Editing Reference
 
@@ -242,7 +240,7 @@ Move the camera.
 ```
 
 
-## License Agreement
+## ⚖️ License Agreement
 
 JoyAI-Image is licensed under Apache 2.0. 
 
