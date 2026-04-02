@@ -82,7 +82,7 @@ pip install -e .
 
 ### 2. Inference
 
-#### Image Understanding
+#### 2.1 Image Understanding
 
 ```bash
 python inference_und.py \
@@ -105,7 +105,7 @@ python inference_und.py \
 | `--top-k` | int | 50 | Top-k sampling threshold |
 | `--output` | str | None | Optional output file to save the response text |
 
-#### Image Editing
+#### 2.2 Image Editing
 
 ```bash
 python inference.py \
@@ -137,9 +137,8 @@ python inference.py \
 | `--rewrite-model` | str | `gpt-5` | Model name for prompt rewriting |
 | `--hsdp-shard-dim` | int | 1 | FSDP shard dimension for multi-GPU (set to GPU count) |
 
----
 
-### Spatial Editing Reference
+### 3. Spatial Editing Reference
 
 JoyAI-Image supports three spatial editing prompt patterns: **Object Move**, **Object Rotation**, and **Camera Control**. For the most stable behavior, we recommend following the prompt templates below as closely as possible.
 
