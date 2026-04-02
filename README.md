@@ -33,7 +33,7 @@ JoyAI-Image is a **unified multimodal foundation model** for image understanding
 ## 💎 Highlights
 
 - **Unified multimodal foundation**: one model family for understanding, generation, and editing through a shared MLLM-MMDiT interface.
-- **Practical data and training recipe**: a scalable pipeline with spatial understanding data ([OpenSpatial](https://github.com/VINHYU/OpenSpatial)), long-text rendering data, editing data, and multi-stage optimization strategies.
+- **Practical data and training recipe**: a scalable pipeline with spatial understanding data ([OpenSpatial](https://github.com/VINHYU/OpenSpatial)), long-text rendering data, editing data ([SpatialEdit](https://github.com/EasonXiao-888/SpatialEdit)), and multi-stage optimization strategies.
 - **Awakened spatial intelligence**: stronger spatial understanding, controllable spatial editing, and novel-view-assisted reasoning through a bidirectional loop between understanding and generation.
 - **Advanced visual generation**: strong long-text typography, layout fidelity, multi-view generation, and controllable editing with better preservation of scene structure.
 
