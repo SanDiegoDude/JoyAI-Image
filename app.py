@@ -286,7 +286,6 @@ def main() -> None:
         server_port=_cli_args.port,
         share=False,
         show_error=True,
-        delete_cache=(3600, 3600),
     )
 
 
