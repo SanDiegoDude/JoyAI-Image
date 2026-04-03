@@ -75,10 +75,87 @@ def ensure_checkpoints(
 
     config_file = root / "infer_config.py"
     if not config_file.exists():
-        src_config = Path(__file__).resolve().parent.parent.parent / "ckpts_infer" / "infer_config.py"
-        if src_config.exists():
-            import shutil
-            shutil.copy2(src_config, config_file)
-            logger.info("Copied infer_config.py to %s", config_file)
+        _write_default_config(config_file)
+        logger.info("Generated infer_config.py at %s", config_file)
 
     return root
+
+
+def _write_default_config(path: Path) -> None:
+    path.write_text('''\
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from infer_runtime.infer_config import InferConfig
+
+
+def _resolve_root() -> Path:
+    here = Path(__file__).resolve().parent
+    if (here / "transformer").exists() and (here / "vae").exists() and (here / "JoyAI-Image-Und").exists():
+        return here
+    raise ValueError(
+        "Place this config file directly inside the checkpoint root."
+    )
+
+
+_ROOT = _resolve_root()
+
+
+@dataclass
+class JoyAIImageInferConfig(InferConfig):
+    dit_arch_config: dict = field(
+        default_factory=lambda: {
+            "target": "modules.models.Transformer3DModel",
+            "params": {
+                "hidden_size": 4096,
+                "in_channels": 16,
+                "heads_num": 32,
+                "mm_double_blocks_depth": 40,
+                "out_channels": 16,
+                "patch_size": [1, 2, 2],
+                "rope_dim_list": [16, 56, 56],
+                "text_states_dim": 4096,
+                "rope_type": "rope",
+                "dit_modulation_type": "wanx",
+                "theta": 10000,
+                "attn_backend": "flash_attn",
+            },
+        }
+    )
+    vae_arch_config: dict = field(
+        default_factory=lambda: {
+            "target": "modules.models.WanxVAE",
+            "params": {
+                "pretrained": str(_ROOT / "vae" / "Wan2.1_VAE.safetensors"),
+            },
+        }
+    )
+    text_encoder_arch_config: dict = field(
+        default_factory=lambda: {
+            "target": "modules.models.load_text_encoder",
+            "params": {
+                "text_encoder_ckpt": str(_ROOT / "JoyAI-Image-Und"),
+            },
+        }
+    )
+    scheduler_arch_config: dict = field(
+        default_factory=lambda: {
+            "target": "modules.models.FlowMatchDiscreteScheduler",
+            "params": {
+                "num_train_timesteps": 1000,
+                "shift": 4.0,
+            },
+        }
+    )
+
+    dit_precision: str = "bf16"
+    vae_precision: str = "bf16"
+    text_encoder_precision: str = "bf16"
+    text_token_max_length: int = 2048
+
+    hsdp_shard_dim: int = 1
+    reshard_after_forward: bool = False
+    use_fsdp_inference: bool = False
+    cpu_offload: bool = False
+    pin_cpu_memory: bool = False
+''')
