@@ -72,8 +72,13 @@ def _load_models() -> None:
         _log(f"Checkpoint: {settings.ckpt_path}")
         _log(f"Precision: {mode} | Memory: {vram}")
 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        _log(f"Device: {device}")
+        if torch.cuda.is_available():
+            device = torch.device("cuda:0")
+            _log(f"Device: {device} ({torch.cuda.get_device_name(0)})")
+        else:
+            device = torch.device("cpu")
+            _log("WARNING: CUDA not available! Running on CPU will be extremely slow.")
+            _log("Install CUDA PyTorch: pip install torch --index-url https://download.pytorch.org/whl/cu124")
         _log(f"Attention backend: {describe_attention_backend()}")
 
         _log("Loading models...")

@@ -59,6 +59,8 @@ def is_rank0() -> bool:
 
 def resolve_device() -> torch.device:
     if not torch.cuda.is_available():
+        print("WARNING: CUDA not available — running on CPU will be extremely slow.")
+        print("Install CUDA PyTorch: pip install torch --index-url https://download.pytorch.org/whl/cu124")
         return torch.device('cpu')
     local_rank = int(os.environ.get('LOCAL_RANK', '0'))
     torch.cuda.set_device(local_rank)
