@@ -8,6 +8,7 @@ import numpy as np
 from einops import rearrange
 from PIL import Image
 import torch
+import torch.nn as nn
 from tqdm import tqdm
 
 from infer_runtime.infer_config import InferConfig, load_infer_config_class_from_pyfile
@@ -20,6 +21,45 @@ from modules.utils.constants import PRECISION_TO_TYPE
 from modules.utils.logging import get_logger
 
 logger = get_logger()
+
+_FP8_DTYPES = (torch.float8_e4m3fn, torch.float8_e5m2)
+
+
+def _patch_fp8_forward(model: nn.Module, compute_dtype: torch.dtype) -> int:
+    """Wrap leaf modules that have FP8 parameters so they upcast per-op.
+
+    Weights stay stored as FP8 in VRAM (~16 GB for the DiT).  During each
+    module's forward, FP8 params are temporarily cast to *compute_dtype*,
+    then restored.  Peak overhead is one layer's worth of bf16 weights.
+    """
+    patched = 0
+    for module in model.modules():
+        fp8_names = [
+            name for name, p in module.named_parameters(recurse=False)
+            if p.dtype in _FP8_DTYPES
+        ]
+        if not fp8_names:
+            continue
+
+        orig_forward = module.forward
+
+        def _make_wrapper(mod, fwd, names, dtype):
+            def wrapper(*args, **kwargs):
+                backup = {}
+                for n in names:
+                    p = getattr(mod, n)
+                    backup[n] = p.data
+                    p.data = p.data.to(dtype)
+                try:
+                    return fwd(*args, **kwargs)
+                finally:
+                    for n, data in backup.items():
+                        getattr(mod, n).data = data
+            return wrapper
+
+        module.forward = _make_wrapper(module, orig_forward, fp8_names, compute_dtype)
+        patched += 1
+    return patched
 
 
 @dataclass
@@ -66,6 +106,12 @@ class EditModel:
         self.dit = load_dit(self.cfg, device=load_device)
         self.dit.requires_grad_(False)
         self.dit.eval()
+
+        if not self.high_vram:
+            compute_dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
+            n = _patch_fp8_forward(self.dit, compute_dtype)
+            if n > 0:
+                logger.info(f"Patched {n} modules for FP8→{compute_dtype} forward")
 
         logger.info(f"Loading pipeline components to {load_device}")
         self.pipeline = load_pipeline(self.cfg, self.dit, load_device)
