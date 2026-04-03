@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
+*.egg-info/
 
 .pytest_cache/
+.venv/
 
+ckpts_infer/
 test_outputs/
 outputs/

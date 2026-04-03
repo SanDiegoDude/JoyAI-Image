@@ -55,12 +55,19 @@ def load_dit(cfg, device: torch.device) -> torch.nn.Module:
             f"Loading model from: {cfg.dit_ckpt}, type: {cfg.dit_ckpt_type}")
 
         if cfg.dit_ckpt_type == "safetensor":
-            # Find all safetensors files
-            safetensors_files = glob.glob(
+            all_files = glob.glob(
                 os.path.join(str(cfg.dit_ckpt), "*.safetensors"))
-            if not safetensors_files:
+            if not all_files:
                 raise ValueError(
                     f"No safetensors files found in {cfg.dit_ckpt}")
+            fp8_files = [f for f in all_files if "fp8" in os.path.basename(f).lower()]
+            non_fp8 = [f for f in all_files if "fp8" not in os.path.basename(f).lower()]
+            if getattr(cfg, "full_precision", False):
+                safetensors_files = non_fp8 or all_files
+            else:
+                safetensors_files = fp8_files or all_files
+            logger.info(f"Selected {len(safetensors_files)} safetensors file(s): "
+                        f"{[os.path.basename(f) for f in safetensors_files]}")
             state_dict = dict(
                 safetensors_weights_iterator(safetensors_files))
         elif cfg.dit_ckpt_type == "pt":
@@ -76,13 +83,15 @@ def load_dit(cfg, device: torch.device) -> torch.nn.Module:
     model_kwargs = {'dtype': dtype, 'device': device, 'args': cfg}
     model = build_from_config(cfg.dit_arch_config, **model_kwargs)
     if not dist.is_initialized() or dist.get_world_size() == 1:
-        # Debug mode
         model.to(device=device)
 
     if state_dict is not None:
-        # filter unused params
         load_state_dict = {}
+        fp8_cast_count = 0
         for k, v in state_dict.items():
+            if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+                v = v.to(dtype)
+                fp8_cast_count += 1
 
             if k == "img_in.weight" and model.img_in.weight.shape != v.shape:
                 logger.info(
@@ -92,6 +101,8 @@ def load_dit(cfg, device: torch.device) -> torch.nn.Module:
                 v = v_new
 
             load_state_dict[k] = v
+        if fp8_cast_count > 0:
+            logger.info(f"Upcast {fp8_cast_count} FP8 tensors to {dtype}")
         model.load_state_dict(load_state_dict, strict=True)
 
     model = maybe_load_fsdp_model(

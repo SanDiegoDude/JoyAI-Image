@@ -36,7 +36,7 @@ def _find_single_entry(directory: Path, kind: str, *, expect_dir: bool) -> Path:
 
 def resolve_checkpoint_layout(root: str | Path) -> CheckpointLayout:
     root_path = Path(root).expanduser().resolve()
-    transformer_ckpt = str(root_path / "transformer" / "transformer.pth")
+    transformer_ckpt = str(root_path / "transformer")
     vae_ckpt = _find_single_entry(root_path / "vae", "vae checkpoint", expect_dir=False)
     text_encoder_ckpt = _must_exist(root_path / "JoyAI-Image-Und", "text encoder checkpoint directory")
     if not text_encoder_ckpt.is_dir():

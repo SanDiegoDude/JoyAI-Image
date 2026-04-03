@@ -655,10 +655,10 @@ class WanxVAE(nn.Module):
             2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743,
             3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
         ]
-        self.mean = torch.tensor(mean, dtype=self.dtype, device=device)
-        self.std = torch.tensor(std, dtype=self.dtype, device=device)
-        self.scale = [self.mean, 1.0 / self.std]
-        
+        self.register_buffer('mean', torch.tensor(mean, dtype=self.dtype))
+        self.register_buffer('std', torch.tensor(std, dtype=self.dtype))
+        self.register_buffer('_inv_std', 1.0 / torch.tensor(std, dtype=self.dtype))
+
         self.config = lambda: None
         self.config.latents_mean = self.mean
         self.config.latents_std = self.std
@@ -672,6 +672,10 @@ class WanxVAE(nn.Module):
             z_dim=16,
         ).eval().requires_grad_(False)
         self.model = self.model.to(device=device, dtype=torch_dtype)
+
+    @property
+    def scale(self):
+        return [self.mean, self._inv_std]
 
     def encode(self, videos, return_posterior=False, **kwargs):
         """

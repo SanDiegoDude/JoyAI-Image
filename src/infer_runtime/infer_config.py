@@ -10,9 +10,10 @@ from typing import Any, Type
 @dataclass
 class InferConfig:
     dit_ckpt: str | None = None
-    dit_ckpt_type: str = "pt"
+    dit_ckpt_type: str = "safetensor"
     dit_arch_config: dict[str, Any] | None = None
     dit_precision: str = "bf16"
+    full_precision: bool = False
 
     vae_arch_config: dict[str, Any] | None = None
     vae_precision: str = "bf16"

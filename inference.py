@@ -23,7 +23,8 @@ warnings.filterwarnings('ignore')
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run local inference without FastAPI.')
-    parser.add_argument('--ckpt-root', required=True, help='Checkpoint root.')
+    parser.add_argument('--ckpt-root', default=str(ROOT_DIR / 'ckpts_infer'),
+                        help='Checkpoint root (default: ./ckpts_infer). Auto-downloads if missing.')
     parser.add_argument('--prompt', required=True, help='Edit prompt or T2I prompt.')
     parser.add_argument('--image', help='Optional input image path for image editing.')
     parser.add_argument('--output', default='example.png', help='Output image path.')
@@ -38,6 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--config', help='Optional config path. Defaults to <ckpt-root>/infer_config.py.')
     parser.add_argument('--rewrite-model', default='gpt-5')
     parser.add_argument('--hsdp-shard-dim', type=int, help='Override config hsdp_shard_dim for multi-GPU FSDP inference.')
+
+    parser.add_argument('--fullprecision', action='store_true',
+                        help='Use bf16 weights instead of FP8. Downloads the full-precision model if needed.')
+    parser.add_argument('--highvram', action='store_true',
+                        help='Keep all models in VRAM (needs ~48 GB+). Default swings components in/out.')
     return parser.parse_args()
 
 
@@ -62,6 +68,7 @@ def resolve_device() -> torch.device:
 def main() -> None:
     args = parse_args()
 
+    from infer_runtime.download import ensure_checkpoints
     from infer_runtime.model import InferenceParams, build_model
     from infer_runtime.settings import load_settings
     from modules.utils import maybe_init_distributed, clean_dist_env
@@ -69,20 +76,27 @@ def main() -> None:
 
     dist_initialized = False
     try:
+        ensure_checkpoints(args.ckpt_root, full_precision=args.fullprecision)
+
         settings = load_settings(
             ckpt_root=args.ckpt_root,
             config_path=args.config,
             rewrite_model=args.rewrite_model,
             default_seed=args.seed,
+            full_precision=args.fullprecision,
+            high_vram=args.highvram,
         )
         device = resolve_device()
         dist_initialized = maybe_init_distributed()
 
         if is_rank0():
+            mode = "bf16" if args.fullprecision else "FP8"
+            vram = "high-VRAM (all in GPU)" if args.highvram else "offloading (low-VRAM)"
             print(f'Chosen device: {device}')
             print(f'Attention backend: {describe_attention_backend()}')
             print(f'Config path: {settings.config_path}')
             print(f'Checkpoint path: {settings.ckpt_path}')
+            print(f'Model precision: {mode} | Memory mode: {vram}')
             if args.hsdp_shard_dim is not None:
                 print(f'Override hsdp_shard_dim: {args.hsdp_shard_dim}')
 

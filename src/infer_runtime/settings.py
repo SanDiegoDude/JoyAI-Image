@@ -14,6 +14,8 @@ class InferSettings:
     openai_api_key: str | None
     openai_base_url: str | None
     default_seed: int
+    full_precision: bool = False
+    high_vram: bool = False
 
 
 def load_settings(
@@ -22,6 +24,8 @@ def load_settings(
     config_path: str | None = None,
     rewrite_model: str | None = None,
     default_seed: int = 42,
+    full_precision: bool = False,
+    high_vram: bool = False,
 ) -> InferSettings:
     layout = resolve_checkpoint_layout(ckpt_root)
     default_config = layout.root / 'infer_config.py'
@@ -37,4 +41,6 @@ def load_settings(
         openai_api_key=os.environ.get('OPENAI_API_KEY'),
         openai_base_url=os.environ.get('OPENAI_BASE_URL'),
         default_seed=default_seed,
+        full_precision=full_precision,
+        high_vram=high_vram,
     )
