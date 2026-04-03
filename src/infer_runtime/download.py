@@ -36,6 +36,11 @@ def ensure_checkpoints(
     has_vae = _has_safetensors(vae_dir)
     has_text_encoder = text_encoder_dir.is_dir() and any(text_encoder_dir.iterdir())
 
+    config_file = root / "infer_config.py"
+    if not config_file.exists():
+        _write_default_config(config_file)
+        logger.info("Generated infer_config.py at %s", config_file)
+
     if has_transformer and has_vae and has_text_encoder:
         return root
 
@@ -72,11 +77,6 @@ def ensure_checkpoints(
             allow_patterns="JoyAI-Image-Und/**",
             local_dir=str(root),
         )
-
-    config_file = root / "infer_config.py"
-    if not config_file.exists():
-        _write_default_config(config_file)
-        logger.info("Generated infer_config.py at %s", config_file)
 
     return root
 
