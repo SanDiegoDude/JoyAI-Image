@@ -37,7 +37,9 @@ _cli_args: argparse.Namespace | None = None
 
 def _log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
-    _load_log.append(f"[{ts}] {msg}")
+    line = f"[{ts}] {msg}"
+    _load_log.append(line)
+    print(line, flush=True)
 
 
 def _get_log_text() -> str:

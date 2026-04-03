@@ -149,8 +149,8 @@ def shard_model(
     *,
     cpu_offload: bool,
     reshard_after_forward: bool = True,
-    mp_policy: MixedPrecisionPolicy | None = MixedPrecisionPolicy(),  # noqa
-    mesh: DeviceMesh | None = None,
+    mp_policy=None,
+    mesh=None,
     fsdp_shard_conditions: list[Callable[[str, nn.Module], bool]] = [],  # noqa
     pin_cpu_memory: bool = True,
 ) -> None:
