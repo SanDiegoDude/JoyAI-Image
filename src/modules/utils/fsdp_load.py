@@ -8,11 +8,19 @@ from collections.abc import Generator, Callable
 from tqdm import tqdm
 import torch
 from torch import nn
-from torch.distributed import init_device_mesh, DeviceMesh
-from torch.distributed.checkpoint.state_dict import set_model_state_dict, get_model_state_dict, StateDictOptions
-from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 from safetensors.torch import safe_open
 from modules.utils.logging import get_logger
+
+# FSDP imports — only available in PyTorch ≥2.6; deferred so single-GPU
+# inference works on older versions.
+_fsdp_available = False
+try:
+    from torch.distributed import init_device_mesh, DeviceMesh
+    from torch.distributed.checkpoint.state_dict import set_model_state_dict, get_model_state_dict, StateDictOptions
+    from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
+    _fsdp_available = True
+except ImportError:
+    pass
 
 
 # TODO(PY): move this to utils elsewhere
@@ -99,12 +107,7 @@ def maybe_load_fsdp_model(
     Load the model with FSDP if is training, else load the model without FSDP.
     """
     logger = get_logger()
-    mp_policy = MixedPrecisionPolicy(param_dtype,
-                                     reduce_dtype,
-                                     output_dtype,
-                                     cast_forward_inputs=False)
 
-    # Check if we should use FSDP
     world_size = int(os.getenv("WORLD_SIZE", "1"))
     assert world_size % hsdp_shard_dim == 0, f"world_size {world_size} must be divisible by hsdp_shard_dim {hsdp_shard_dim}"
     hsdp_replicate_dim = world_size // hsdp_shard_dim
@@ -116,9 +119,17 @@ def maybe_load_fsdp_model(
             f"hsdp_replicate_dim * hsdp_shard_dim = {hsdp_replicate_dim}x{hsdp_shard_dim} <= 1, not using FSDP.")
 
     if use_fsdp:
+        if not _fsdp_available:
+            raise RuntimeError(
+                "Multi-GPU FSDP requires PyTorch ≥2.6. "
+                "Install a newer PyTorch or use single-GPU inference."
+            )
+        mp_policy = MixedPrecisionPolicy(param_dtype,
+                                         reduce_dtype,
+                                         output_dtype,
+                                         cast_forward_inputs=False)
         device_mesh = init_device_mesh(
             "cuda",
-            # (Replicate(), Shard(dim=0))
             mesh_shape=(hsdp_replicate_dim, hsdp_shard_dim),
             mesh_dim_names=("replicate", "shard"),
         )
