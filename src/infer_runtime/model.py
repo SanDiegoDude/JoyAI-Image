@@ -136,7 +136,25 @@ class EditModel:
     def infer(self, params: InferenceParams) -> Image.Image:
         if self.high_vram:
             return self._infer_highvram(params)
-        return self._infer_offload(params)
+        try:
+            return self._infer_offload(params)
+        except Exception:
+            self._emergency_offload()
+            raise
+
+    def _emergency_offload(self) -> None:
+        """Move all pipeline components back to CPU after a failed generation."""
+        cpu = torch.device('cpu')
+        pipe = self.pipeline
+        for name in ('text_encoder', 'transformer', 'vae'):
+            component = getattr(pipe, name, None)
+            if component is not None:
+                try:
+                    component.to(cpu)
+                except Exception:
+                    pass
+        torch.cuda.empty_cache()
+        logger.info("Emergency offload: all components moved to CPU")
 
     # ------------------------------------------------------------------
     # High-VRAM path: everything stays on GPU (original behavior)

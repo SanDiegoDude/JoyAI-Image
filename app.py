@@ -104,6 +104,14 @@ def _load_models() -> None:
 # Inference
 # ---------------------------------------------------------------------------
 
+DIM_MULTIPLE = 16  # VAE spatial factor (8) × patch size (2)
+
+
+def _snap_dim(val: int) -> int:
+    """Round a dimension to the nearest valid multiple."""
+    return max(DIM_MULTIPLE, round(val / DIM_MULTIPLE) * DIM_MULTIPLE)
+
+
 def generate(
     prompt: str,
     image: Image.Image | None,
@@ -126,6 +134,9 @@ def generate(
         model = _model
     if model is None:
         return None, "Model failed to load. Check the log tab."
+
+    height = _snap_dim(int(height))
+    width = _snap_dim(int(width))
 
     from infer_runtime.model import InferenceParams
 
@@ -158,7 +169,7 @@ def generate(
     result.save(save_path)
 
     info = (
-        f"Mode: {mode} | Steps: {steps} | CFG: {guidance_scale} | "
+        f"Mode: {mode} | {width}×{height} | Steps: {steps} | CFG: {guidance_scale} | "
         f"Seed: {seed} | Time: {elapsed:.1f}s ({elapsed/steps:.2f}s/step)\n"
         f"Saved: {save_path}"
     )
@@ -217,16 +228,48 @@ def build_ui() -> gr.Blocks:
                                 value=1024,
                             )
                         with gr.Accordion("Text-to-Image Dimensions", open=False):
-                            gr.Markdown("*Only used when no input image is provided.*")
+                            gr.Markdown("*Only used when no input image is provided. All dims snapped to multiples of 16.*")
+                            t2i_preset = gr.Dropdown(
+                                label="Preset",
+                                choices=[
+                                    "1024×1024 (1:1)",
+                                    "1152×896 (9:7 landscape)",
+                                    "896×1152 (7:9 portrait)",
+                                    "1216×832 (3:2 landscape)",
+                                    "832×1216 (2:3 portrait)",
+                                    "1344×768 (16:9 landscape)",
+                                    "768×1344 (9:16 portrait)",
+                                    "1536×1024 (3:2 large)",
+                                    "1024×1536 (2:3 large)",
+                                    "1920×1088 (≈16:9 HD)",
+                                    "1088×1920 (≈9:16 HD)",
+                                    "2048×2048 (1:1 large)",
+                                    "Custom",
+                                ],
+                                value="1024×1024 (1:1)",
+                            )
                             with gr.Row():
-                                t2i_height = gr.Slider(
-                                    label="Height", minimum=256, maximum=2048,
-                                    value=1024, step=64,
-                                )
                                 t2i_width = gr.Slider(
                                     label="Width", minimum=256, maximum=2048,
-                                    value=1024, step=64,
+                                    value=1024, step=16,
                                 )
+                                t2i_height = gr.Slider(
+                                    label="Height", minimum=256, maximum=2048,
+                                    value=1024, step=16,
+                                )
+
+                            def _apply_preset(preset):
+                                if preset == "Custom" or "×" not in preset:
+                                    return gr.update(), gr.update()
+                                dims = preset.split("(")[0].strip()
+                                w, h = dims.split("×")
+                                return int(w), int(h)
+
+                            t2i_preset.change(
+                                fn=_apply_preset,
+                                inputs=[t2i_preset],
+                                outputs=[t2i_width, t2i_height],
+                            )
                         generate_btn = gr.Button("Generate", variant="primary", size="lg")
 
                     with gr.Column(scale=1):
