@@ -60,6 +60,7 @@ def _load_models() -> None:
         full_prec = _cli_args.fullprecision if _cli_args else False
         high_vram = _cli_args.highvram if _cli_args else False
         lod = _cli_args.lod if _cli_args else False
+        nf4_dit = _cli_args.nf4_dit if _cli_args else False
 
         if _cli_args and _cli_args.vlm_4bit:
             vlm_bits = 4
@@ -79,8 +80,14 @@ def _load_models() -> None:
             high_vram=high_vram,
             lod=lod,
             vlm_bits=vlm_bits,
+            nf4_dit=nf4_dit,
         )
-        mode = "bf16" if full_prec else "FP8"
+        if nf4_dit:
+            mode = "NF4"
+        elif full_prec:
+            mode = "bf16"
+        else:
+            mode = "FP8"
         if lod:
             vram_label = "LOD (load-on-demand)"
         elif high_vram:
@@ -442,6 +449,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--lod', action='store_true',
                         help='Load-on-demand: load models from disk each run, '
                              'delete after. Lightest memory, slowest inference.')
+    parser.add_argument('--nf4-dit', action='store_true', dest='nf4_dit',
+                        help='Quantize DiT transformer to NF4 4-bit (~8 GB vs 16 GB FP8).')
     vlm_group = parser.add_mutually_exclusive_group()
     vlm_group.add_argument('--4bit-vlm', action='store_true', dest='vlm_4bit',
                            help='Quantize text encoder to 4-bit NF4 (lowest VRAM, ~4.4 GB).')
@@ -478,7 +487,12 @@ def main() -> None:
     load_thread.start()
     _log("Model loading started in background...")
 
-    mode = "bf16" if _cli_args.fullprecision else "FP8"
+    if _cli_args.nf4_dit:
+        mode = "NF4"
+    elif _cli_args.fullprecision:
+        mode = "bf16"
+    else:
+        mode = "FP8"
     if _cli_args.lod:
         vram_label = "LOD (load-on-demand)"
     elif _cli_args.highvram:

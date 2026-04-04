@@ -21,6 +21,7 @@ def run_lod_inference(
     device_str: str,
     params_dict: dict,
     vlm_bits: int = 8,
+    nf4_dit: bool = False,
 ):
     """Entry point for the LOD worker process (target of multiprocessing.Process).
 
@@ -56,6 +57,7 @@ def run_lod_inference(
             high_vram=False,
             lod=False,
             vlm_bits=vlm_bits,
+            nf4_dit=nf4_dit,
         )
 
         seed_everything(settings.default_seed)

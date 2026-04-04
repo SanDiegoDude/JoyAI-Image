@@ -298,7 +298,7 @@ class WanTimeTextImageEmbedding(nn.Module):
         timestep = self.timesteps_proj(timestep)
 
         time_embedder_dtype = next(iter(self.time_embedder.parameters())).dtype
-        if timestep.dtype != time_embedder_dtype and time_embedder_dtype != torch.int8:
+        if timestep.dtype != time_embedder_dtype and time_embedder_dtype not in (torch.int8, torch.uint8):
             timestep = timestep.to(time_embedder_dtype)
         temb = self.time_embedder(timestep).type_as(encoder_hidden_states)
         timestep_proj = self.time_proj(self.act_fn(temb))

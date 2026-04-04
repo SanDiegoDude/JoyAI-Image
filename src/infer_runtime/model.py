@@ -104,6 +104,7 @@ class EditModel:
         self.cfg.dit_ckpt = settings.ckpt_path
         self.cfg.full_precision = settings.full_precision
         self.cfg.vlm_bits = settings.vlm_bits
+        self.cfg.nf4_dit = settings.nf4_dit
         self.cfg.training_mode = False
         if hsdp_shard_dim_override is not None:
             self.cfg.hsdp_shard_dim = hsdp_shard_dim_override
@@ -123,11 +124,11 @@ class EditModel:
             load_device = torch.device('cpu')
 
         logger.info(f"Loading DiT to {load_device} (high_vram={self.high_vram})")
-        self.dit = load_dit(self.cfg, device=load_device)
+        self.dit = load_dit(self.cfg, device=load_device, gpu_device=self.device)
         self.dit.requires_grad_(False)
         self.dit.eval()
 
-        if not self.high_vram:
+        if not self.high_vram and not self.cfg.nf4_dit:
             compute_dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
             n = _patch_fp8_forward(self.dit, compute_dtype)
             if n > 0:
@@ -208,6 +209,7 @@ class EditModel:
                 str(self.device),
                 params_dict,
                 self.settings.vlm_bits,
+                self.settings.nf4_dit,
             ),
         )
         worker.start()
@@ -246,7 +248,10 @@ class EditModel:
         pipe = self.pipeline
         if pipe is None:
             return
+        nf4 = getattr(self.cfg, 'nf4_dit', False)
         for name in ('text_encoder', 'transformer', 'vae'):
+            if name == 'transformer' and nf4:
+                continue
             component = getattr(pipe, name, None)
             if component is not None:
                 try:
@@ -291,6 +296,7 @@ class EditModel:
         gpu = self.device
         cpu = torch.device('cpu')
         dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
+        nf4 = getattr(self.cfg, 'nf4_dit', False)
         prompts, neg_prompts, pil_images, height, width = self._prepare_inputs(params)
 
         num_items = 1 if pil_images is None else 1 + len(pil_images)
@@ -375,7 +381,8 @@ class EditModel:
 
         # ---- Phase 3: Denoising loop (transformer → GPU) ----
         logger.info(f"Phase 3/4: Denoising ({params.steps} steps)")
-        pipe.transformer.to(gpu)
+        if not nf4:
+            pipe.transformer.to(gpu)
         latents = latents.to(gpu)
         prompt_embeds = prompt_embeds.to(gpu)
         if prompt_embeds_mask is not None:
@@ -414,7 +421,8 @@ class EditModel:
 
         latents = latents.to(cpu)
         del prompt_embeds, prompt_embeds_mask, ref_latents
-        pipe.transformer.to(cpu)
+        if not nf4:
+            pipe.transformer.to(cpu)
         torch.cuda.empty_cache()
 
         # ---- Phase 4: VAE decode (VAE → GPU) ----

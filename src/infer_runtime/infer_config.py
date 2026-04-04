@@ -14,6 +14,7 @@ class InferConfig:
     dit_arch_config: dict[str, Any] | None = None
     dit_precision: str = "bf16"
     full_precision: bool = False
+    nf4_dit: bool = False
 
     vae_arch_config: dict[str, Any] | None = None
     vae_precision: str = "bf16"

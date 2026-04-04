@@ -58,11 +58,13 @@ def load_pipeline(cfg, dit, device: torch.device, gpu_device: torch.device | Non
         args=cfg,
     )
 
-    if vlm_bits >= 16:
+    nf4 = getattr(cfg, 'nf4_dit', False)
+    if vlm_bits >= 16 and not nf4:
         pipeline = pipeline.to(device)
     else:
         pipeline.vae.to(device)
-        pipeline.transformer.to(device)
+        if not nf4:
+            pipeline.transformer.to(device)
 
     return pipeline
 
@@ -79,16 +81,93 @@ def _select_safetensors(ckpt_dir: str, full_precision: bool) -> list[str]:
     return fp8_files or all_files
 
 
-def load_dit(cfg, device: torch.device) -> torch.nn.Module:
+def _replace_linear_with_nf4(model: torch.nn.Module, compute_dtype: torch.dtype = torch.bfloat16) -> int:
+    """Recursively replace nn.Linear with bnb.nn.Linear4bit (NF4).
+
+    Only replaces the structure; weights stay on CPU as bf16.
+    Call ``_quantize_nf4_on_gpu`` afterwards to quantize on GPU.
+    """
+    import bitsandbytes as bnb
+
+    replaced = 0
+    for name, child in model.named_children():
+        if isinstance(child, torch.nn.Linear):
+            has_bias = child.bias is not None
+            new_linear = bnb.nn.Linear4bit(
+                child.in_features,
+                child.out_features,
+                bias=has_bias,
+                compute_dtype=compute_dtype,
+                quant_type='nf4',
+                compress_statistics=True,
+            )
+            new_linear.weight = torch.nn.Parameter(
+                child.weight.data.contiguous(), requires_grad=False)
+            if has_bias:
+                new_linear.bias = torch.nn.Parameter(child.bias.data.clone(), requires_grad=False)
+            setattr(model, name, new_linear)
+            replaced += 1
+        else:
+            replaced += _replace_linear_with_nf4(child, compute_dtype)
+    return replaced
+
+
+def _quantize_nf4_on_gpu(model: torch.nn.Module, device: torch.device) -> int:
+    """Move model to GPU, explicitly quantizing each Linear4bit layer.
+
+    PyTorch's ``Module.to()`` loses bitsandbytes ``quant_state`` because
+    ``_apply`` overwrites parameters.  This function does it correctly:
+    each weight is quantized on GPU via ``bnb.functional.quantize_4bit``
+    and stored as a proper ``Params4bit`` with intact ``quant_state``.
+    Non-4bit parameters and buffers are moved to *device* normally.
+    """
+    import bitsandbytes as bnb
+    import bitsandbytes.functional as bnbF
+
+    quantized = 0
+    for module in model.modules():
+        if isinstance(module, bnb.nn.Linear4bit):
+            w_gpu = module.weight.data.to(torch.float16).to(device)
+            w_4bit, quant_state = bnbF.quantize_4bit(
+                w_gpu, quant_type='nf4', compress_statistics=True)
+            del w_gpu
+            module.weight = bnb.nn.Params4bit(
+                w_4bit, requires_grad=False,
+                quant_type='nf4', compress_statistics=True,
+                quant_state=quant_state,
+            )
+            if module.bias is not None:
+                module.bias.data = module.bias.data.to(device)
+            quantized += 1
+            continue
+
+        for name, param in module.named_parameters(recurse=False):
+            if not isinstance(param, bnb.nn.Params4bit):
+                param.data = param.data.to(device)
+        for name, buf in module.named_buffers(recurse=False):
+            buf.data = buf.data.to(device)
+
+    return quantized
+
+
+def load_dit(cfg, device: torch.device, gpu_device: torch.device | None = None) -> torch.nn.Module:
     """Load DiT model.
 
     When device is CPU (offloading mode), uses a memory-efficient path:
     builds the model on ``meta`` device and loads weights with
     ``assign=True`` so FP8 tensors stay as FP8 in system RAM (~16 GB)
     instead of upcasting to bf16 (~32 GB).
+
+    When ``cfg.nf4_dit`` is True, loads bf16 weights and replaces all
+    nn.Linear layers with bitsandbytes NF4 4-bit (~8 GB vs 16 GB FP8).
     """
     logger = get_logger()
     low_vram = (device.type == 'cpu')
+    nf4 = getattr(cfg, 'nf4_dit', False)
+
+    # ---- NF4 path: load bf16 → replace Linear → quantize on GPU ----
+    if nf4:
+        return _load_dit_nf4(cfg, device, gpu_device, logger)
 
     # ---- Load state dict from disk ----
     state_dict = None
@@ -187,6 +266,69 @@ def load_dit(cfg, device: torch.device) -> torch.nn.Module:
             f"Model has mixed dtypes: {param_dtypes}. Converting to {dtype}")
         model = model.to(dtype)
 
+    return model.eval()
+
+
+def _load_dit_nf4(cfg, target_device: torch.device, gpu_device: torch.device | None, logger) -> torch.nn.Module:
+    """Load DiT with NF4 quantization via bitsandbytes.
+
+    1. Build model on CPU with bf16 dtype
+    2. Load bf16 state dict (always uses full-precision weights for best quality)
+    3. Replace nn.Linear → bnb.nn.Linear4bit
+    4. Move to GPU to trigger quantization
+    5. If target is CPU (offload mode), move quantized model back to CPU
+    """
+    dtype = torch.bfloat16
+    gpu = gpu_device or (target_device if target_device.type == 'cuda' else torch.device('cuda:0'))
+
+    logger.info("NF4 DiT: building model on CPU with bf16 dtype")
+    model_kwargs = {'dtype': dtype, 'device': torch.device('cpu'), 'args': cfg}
+    model = build_from_config(cfg.dit_arch_config, **model_kwargs)
+
+    if cfg.dit_ckpt is not None:
+        logger.info("NF4 DiT: loading bf16 weights (full-precision source for best NF4 quality)")
+        safetensors_files = _select_safetensors(cfg.dit_ckpt, full_precision=True)
+        logger.info(f"  Files: {[os.path.basename(f) for f in safetensors_files]}")
+        state_dict = dict(safetensors_weights_iterator(safetensors_files))
+
+        fp8_cast = 0
+        for k, v in state_dict.items():
+            if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+                state_dict[k] = v.to(dtype)
+                fp8_cast += 1
+        if fp8_cast > 0:
+            logger.info(f"  Upcast {fp8_cast} FP8 tensors to bf16 for NF4 source")
+
+        if "img_in.weight" in state_dict:
+            expected = model.img_in.weight.shape
+            v = state_dict["img_in.weight"]
+            if expected != v.shape:
+                logger.info(f"  Inflate img_in.weight from {v.shape} to {expected}")
+                v_new = torch.zeros(expected, dtype=dtype)
+                v_new[:, :v.shape[1], :, :, :] = v
+                state_dict["img_in.weight"] = v_new
+
+        model.load_state_dict(state_dict, strict=True)
+        del state_dict
+
+    total_params = sum(p.numel() for p in model.parameters())
+    cpu_gb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**3
+    logger.info(f"NF4 DiT: {total_params / 1e9:.2f}B params, {cpu_gb:.1f} GB bf16 on CPU")
+
+    logger.info("NF4 DiT: replacing nn.Linear → bnb.nn.Linear4bit (NF4)")
+    n_replaced = _replace_linear_with_nf4(model, compute_dtype=dtype)
+    logger.info(f"  Replaced {n_replaced} Linear layers with NF4")
+
+    logger.info(f"NF4 DiT: quantizing {n_replaced} layers on {gpu}...")
+    n_quantized = _quantize_nf4_on_gpu(model, gpu)
+    if torch.cuda.is_available():
+        nf4_gb = torch.cuda.memory_allocated(gpu) / 1024**3
+        logger.info(f"NF4 DiT: quantized model on GPU = {nf4_gb:.2f} GB ({n_quantized} layers)")
+
+    if target_device.type != 'cuda':
+        logger.info("NF4 DiT: keeping on GPU (small enough to stay resident)")
+
+    model.requires_grad_(False)
     return model.eval()
 
 __all__ = [

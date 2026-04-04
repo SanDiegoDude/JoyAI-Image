@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--lod', action='store_true',
                         help='Load-on-demand: load models from disk each run, delete after. '
                              'Lightest memory, slowest inference.')
+    parser.add_argument('--nf4-dit', action='store_true', dest='nf4_dit',
+                        help='Quantize DiT transformer to NF4 4-bit (~8 GB vs 16 GB FP8).')
     vlm_group = parser.add_mutually_exclusive_group()
     vlm_group.add_argument('--4bit-vlm', action='store_true', dest='vlm_4bit',
                            help='Quantize text encoder to 4-bit NF4 (lowest VRAM, ~4.4 GB).')
@@ -104,12 +106,18 @@ def main() -> None:
             high_vram=args.highvram,
             lod=args.lod,
             vlm_bits=vlm_bits,
+            nf4_dit=args.nf4_dit,
         )
         device = resolve_device()
         dist_initialized = maybe_init_distributed()
 
         if is_rank0():
-            mode = "bf16" if args.fullprecision else "FP8"
+            if args.nf4_dit:
+                mode = "NF4"
+            elif args.fullprecision:
+                mode = "bf16"
+            else:
+                mode = "FP8"
             if args.lod:
                 vram = "LOD (load-on-demand)"
             elif args.highvram:
