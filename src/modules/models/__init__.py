@@ -42,9 +42,13 @@ def load_pipeline(cfg, dit, device: torch.device, gpu_device: torch.device | Non
         cfg.text_encoder_arch_config, **te_kwargs)
 
     if vlm_bits < 16 and device.type != "cuda":
-        logger.info("Moving quantized text encoder to CPU for offload mode")
-        text_encoder.to("cpu")
-        torch.cuda.empty_cache()
+        try:
+            logger.info("Moving quantized text encoder to CPU for offload mode")
+            text_encoder.to("cpu")
+            torch.cuda.empty_cache()
+        except ValueError:
+            logger.info("Quantized text encoder does not support .to() — "
+                         "keeping on GPU (will stay resident)")
 
     # scheduler
     scheduler = build_from_config(cfg.scheduler_arch_config)

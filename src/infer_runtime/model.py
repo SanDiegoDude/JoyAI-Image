@@ -304,7 +304,11 @@ class EditModel:
 
         # ---- Phase 1: Text Encoding (text_encoder → GPU) ----
         logger.info("Phase 1/4: Text encoding")
-        pipe.text_encoder.to(gpu)
+        te_movable = True
+        try:
+            pipe.text_encoder.to(gpu)
+        except ValueError:
+            te_movable = False
 
         prompt_embeds, prompt_embeds_mask = pipe.encode_prompt(
             prompt=prompts, images=pil_images, device=gpu,
@@ -340,7 +344,8 @@ class EditModel:
         prompt_embeds = prompt_embeds.to(cpu)
         if prompt_embeds_mask is not None:
             prompt_embeds_mask = prompt_embeds_mask.to(cpu)
-        pipe.text_encoder.to(cpu)
+        if te_movable:
+            pipe.text_encoder.to(cpu)
         torch.cuda.empty_cache()
 
         # ---- Phase 2: VAE condition encode (VAE → GPU if editing) ----
