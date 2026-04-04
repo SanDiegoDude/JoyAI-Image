@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 HF_REPO_FP8 = "SanDiegoDude/JoyAI-Image-Edit-FP8"
 HF_REPO_FULL = "SanDiegoDude/JoyAI-Image-Edit-Safetensors"
+HF_REPO_NF4 = "SanDiegoDude/JoyAI-Image-Edit-NF4"
 
 
 def _has_safetensors(directory: Path) -> bool:
@@ -18,6 +19,7 @@ def _has_safetensors(directory: Path) -> bool:
 def ensure_checkpoints(
     ckpt_root: str | Path,
     full_precision: bool = False,
+    nf4_dit: bool = False,
 ) -> Path:
     """Download missing model files from HuggingFace.
 
@@ -47,7 +49,7 @@ def ensure_checkpoints(
     from huggingface_hub import hf_hub_download, snapshot_download
 
     if not has_transformer:
-        if full_precision:
+        if full_precision or nf4_dit:
             logger.info("Downloading bf16 transformer from %s ...", HF_REPO_FULL)
             hf_hub_download(
                 HF_REPO_FULL,
@@ -61,6 +63,19 @@ def ensure_checkpoints(
                 "transformer/transformer_fp8.safetensors",
                 local_dir=str(root),
             )
+
+    if nf4_dit:
+        nf4_file = transformer_dir / "transformer_nf4.safetensors"
+        if not nf4_file.exists():
+            logger.info("Downloading pre-quantized NF4 transformer from %s ...", HF_REPO_NF4)
+            try:
+                hf_hub_download(
+                    HF_REPO_NF4,
+                    "transformer/transformer_nf4.safetensors",
+                    local_dir=str(root),
+                )
+            except Exception as e:
+                logger.warning("NF4 download failed (%s) — will fall back to runtime quantization", e)
 
     if not has_vae:
         logger.info("Downloading VAE from %s ...", HF_REPO_FULL)

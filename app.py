@@ -70,7 +70,7 @@ def _load_models() -> None:
             vlm_bits = 8
 
         _log("Checking / downloading checkpoints...")
-        ensure_checkpoints(CKPT_ROOT, full_precision=full_prec)
+        ensure_checkpoints(CKPT_ROOT, full_precision=full_prec, nf4_dit=nf4_dit)
 
         _log("Resolving checkpoint layout...")
         settings = load_settings(

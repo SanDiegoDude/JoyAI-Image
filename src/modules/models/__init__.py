@@ -269,64 +269,167 @@ def load_dit(cfg, device: torch.device, gpu_device: torch.device | None = None) 
     return model.eval()
 
 
+_NF4_META = ".__nf4__."
+
+
+def _find_nf4_checkpoint(ckpt_dir: str) -> str | None:
+    """Return path to pre-quantized NF4 safetensors if it exists."""
+    candidate = os.path.join(ckpt_dir, "transformer_nf4.safetensors")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _load_nf4_fast(model: torch.nn.Module, nf4_path: str, device: torch.device, logger) -> torch.nn.Module:
+    """Fast path: load a pre-quantized NF4 safetensors directly to GPU.
+
+    The file was created by ``convert_to_nf4.py`` which saves packed uint8
+    weights alongside their QuantState components as flat tensors.
+    """
+    import bitsandbytes as bnb
+    import bitsandbytes.functional as bnbF
+    from safetensors.torch import load_file
+
+    logger.info(f"NF4 DiT (fast): loading pre-quantized {os.path.basename(nf4_path)}")
+    raw = load_file(nf4_path)
+
+    nf4_keys = set()
+    for k in raw:
+        if _NF4_META in k:
+            base = k.split(_NF4_META)[0]
+            nf4_keys.add(base)
+
+    logger.info(f"  {len(nf4_keys)} NF4-quantized weight tensors detected")
+
+    loaded = 0
+    for module_name, module in model.named_modules():
+        if isinstance(module, bnb.nn.Linear4bit):
+            key = f"{module_name}.weight"
+            if key not in nf4_keys:
+                continue
+
+            packed = raw[key].to(device)
+            absmax = raw[f"{key}{_NF4_META}absmax"].to(device)
+            quant_map = raw[f"{key}{_NF4_META}quant_map"].to(device)
+            shape = torch.Size(raw[f"{key}{_NF4_META}shape"].tolist())
+            offset = raw[f"{key}{_NF4_META}offset"].item()
+
+            state2 = None
+            nested_key = f"{key}{_NF4_META}nested_absmax"
+            if nested_key in raw:
+                state2 = bnbF.QuantState(
+                    absmax=raw[nested_key].to(device),
+                    shape=None,
+                    code=raw[f"{key}{_NF4_META}nested_quant_map"].to(device),
+                    blocksize=256,
+                    dtype=torch.float32,
+                    quant_type="linear",
+                    offset=None,
+                    state2=None,
+                )
+
+            qs = bnbF.QuantState(
+                absmax=absmax,
+                shape=shape,
+                code=quant_map,
+                blocksize=64,
+                dtype=torch.bfloat16,
+                quant_type="nf4",
+                offset=torch.tensor(offset, device=device),
+                state2=state2,
+            )
+
+            module.weight = bnb.nn.Params4bit(
+                packed, requires_grad=False,
+                quant_type="nf4", compress_statistics=True,
+                quant_state=qs,
+            )
+
+            bias_key = f"{module_name}.bias"
+            if bias_key in raw:
+                module.bias = torch.nn.Parameter(raw[bias_key].to(device), requires_grad=False)
+            loaded += 1
+            continue
+
+        for pname, _ in list(module.named_parameters(recurse=False)):
+            full_key = f"{module_name}.{pname}" if module_name else pname
+            if full_key in raw and full_key not in nf4_keys:
+                setattr(module, pname, torch.nn.Parameter(
+                    raw[full_key].to(device), requires_grad=False))
+
+        for bname, _ in list(module.named_buffers(recurse=False)):
+            full_key = f"{module_name}.{bname}" if module_name else bname
+            if full_key in raw:
+                module.register_buffer(bname, raw[full_key].to(device))
+
+    del raw
+    logger.info(f"  Loaded {loaded} NF4 layers directly to {device}")
+
+    if torch.cuda.is_available():
+        nf4_gb = torch.cuda.memory_allocated(device) / 1024**3
+        logger.info(f"NF4 DiT (fast): model on GPU = {nf4_gb:.2f} GB")
+
+    return model
+
+
 def _load_dit_nf4(cfg, target_device: torch.device, gpu_device: torch.device | None, logger) -> torch.nn.Module:
     """Load DiT with NF4 quantization via bitsandbytes.
 
-    1. Build model on CPU with bf16 dtype
-    2. Load bf16 state dict (always uses full-precision weights for best quality)
-    3. Replace nn.Linear → bnb.nn.Linear4bit
-    4. Move to GPU to trigger quantization
-    5. If target is CPU (offload mode), move quantized model back to CPU
+    Tries to load a pre-quantized ``transformer_nf4.safetensors`` first
+    (created by ``convert_to_nf4.py``).  Falls back to runtime quantization
+    from bf16 weights if no pre-quantized file is found.
     """
+    import bitsandbytes as bnb
+
     dtype = torch.bfloat16
     gpu = gpu_device or (target_device if target_device.type == 'cuda' else torch.device('cuda:0'))
 
-    logger.info("NF4 DiT: building model on CPU with bf16 dtype")
-    model_kwargs = {'dtype': dtype, 'device': torch.device('cpu'), 'args': cfg}
-    model = build_from_config(cfg.dit_arch_config, **model_kwargs)
+    nf4_path = _find_nf4_checkpoint(cfg.dit_ckpt) if cfg.dit_ckpt else None
 
-    if cfg.dit_ckpt is not None:
-        logger.info("NF4 DiT: loading bf16 weights (full-precision source for best NF4 quality)")
-        safetensors_files = _select_safetensors(cfg.dit_ckpt, full_precision=True)
-        logger.info(f"  Files: {[os.path.basename(f) for f in safetensors_files]}")
-        state_dict = dict(safetensors_weights_iterator(safetensors_files))
+    if nf4_path:
+        logger.info(f"NF4 DiT: found pre-quantized checkpoint: {os.path.basename(nf4_path)}")
+        model_kwargs = {'dtype': dtype, 'device': torch.device('meta'), 'args': cfg}
+        model = build_from_config(cfg.dit_arch_config, **model_kwargs)
+        _replace_linear_with_nf4(model, compute_dtype=dtype)
+        model = _load_nf4_fast(model, nf4_path, gpu, logger)
+    else:
+        logger.warning("NF4 DiT: no pre-quantized file found — falling back to "
+                        "runtime quantization (slow, uses ~32 GB RAM). "
+                        "Run convert_to_nf4.py once to create the fast-load file.")
 
-        fp8_cast = 0
-        for k, v in state_dict.items():
-            if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-                state_dict[k] = v.to(dtype)
-                fp8_cast += 1
-        if fp8_cast > 0:
-            logger.info(f"  Upcast {fp8_cast} FP8 tensors to bf16 for NF4 source")
+        logger.info("NF4 DiT: building model on CPU with bf16 dtype")
+        model_kwargs = {'dtype': dtype, 'device': torch.device('cpu'), 'args': cfg}
+        model = build_from_config(cfg.dit_arch_config, **model_kwargs)
 
-        if "img_in.weight" in state_dict:
-            expected = model.img_in.weight.shape
-            v = state_dict["img_in.weight"]
-            if expected != v.shape:
-                logger.info(f"  Inflate img_in.weight from {v.shape} to {expected}")
-                v_new = torch.zeros(expected, dtype=dtype)
-                v_new[:, :v.shape[1], :, :, :] = v
-                state_dict["img_in.weight"] = v_new
+        if cfg.dit_ckpt is not None:
+            logger.info("NF4 DiT: loading bf16 weights (full-precision source)")
+            safetensors_files = _select_safetensors(cfg.dit_ckpt, full_precision=True)
+            logger.info(f"  Files: {[os.path.basename(f) for f in safetensors_files]}")
+            state_dict = dict(safetensors_weights_iterator(safetensors_files))
 
-        model.load_state_dict(state_dict, strict=True)
-        del state_dict
+            for k, v in state_dict.items():
+                if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+                    state_dict[k] = v.to(dtype)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    cpu_gb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**3
-    logger.info(f"NF4 DiT: {total_params / 1e9:.2f}B params, {cpu_gb:.1f} GB bf16 on CPU")
+            if "img_in.weight" in state_dict:
+                expected = model.img_in.weight.shape
+                v = state_dict["img_in.weight"]
+                if expected != v.shape:
+                    v_new = torch.zeros(expected, dtype=dtype)
+                    v_new[:, :v.shape[1], :, :, :] = v
+                    state_dict["img_in.weight"] = v_new
 
-    logger.info("NF4 DiT: replacing nn.Linear → bnb.nn.Linear4bit (NF4)")
-    n_replaced = _replace_linear_with_nf4(model, compute_dtype=dtype)
-    logger.info(f"  Replaced {n_replaced} Linear layers with NF4")
+            model.load_state_dict(state_dict, strict=True)
+            del state_dict
 
-    logger.info(f"NF4 DiT: quantizing {n_replaced} layers on {gpu}...")
-    n_quantized = _quantize_nf4_on_gpu(model, gpu)
+        logger.info("NF4 DiT: replacing nn.Linear → bnb.nn.Linear4bit (NF4)")
+        n = _replace_linear_with_nf4(model, compute_dtype=dtype)
+        logger.info(f"  Replaced {n} Linear layers")
+
+        logger.info(f"NF4 DiT: quantizing on {gpu}...")
+        _quantize_nf4_on_gpu(model, gpu)
+
     if torch.cuda.is_available():
         nf4_gb = torch.cuda.memory_allocated(gpu) / 1024**3
-        logger.info(f"NF4 DiT: quantized model on GPU = {nf4_gb:.2f} GB ({n_quantized} layers)")
-
-    if target_device.type != 'cuda':
-        logger.info("NF4 DiT: keeping on GPU (small enough to stay resident)")
+        logger.info(f"NF4 DiT: {nf4_gb:.2f} GB on GPU — keeping resident")
 
     model.requires_grad_(False)
     return model.eval()

@@ -88,7 +88,7 @@ def main() -> None:
 
     dist_initialized = False
     try:
-        ensure_checkpoints(args.ckpt_root, full_precision=args.fullprecision)
+        ensure_checkpoints(args.ckpt_root, full_precision=args.fullprecision, nf4_dit=args.nf4_dit)
 
         if args.vlm_4bit:
             vlm_bits = 4
