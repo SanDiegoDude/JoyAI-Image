@@ -222,8 +222,8 @@ def _build_api_app(api_port: int):
             return jsonify({"error": "prompt is required"}), 400
 
         neg_prompt = data.get("negative_prompt", "").strip()
-        steps = int(data.get("steps", 30))
-        guidance_scale = float(data.get("guidance_scale", 5.0))
+        steps = int(data.get("steps", 18))
+        guidance_scale = float(data.get("guidance_scale", 4.0))
         seed = int(data.get("seed", 42))
         save_image = bool(data.get("save_image", False))
 
@@ -326,11 +326,11 @@ def build_ui() -> gr.Blocks:
                         with gr.Row():
                             steps = gr.Slider(
                                 label="Steps", minimum=1, maximum=100,
-                                value=30, step=1,
+                                value=18, step=1,
                             )
                             guidance = gr.Slider(
                                 label="CFG Scale", minimum=1.0, maximum=20.0,
-                                value=5.0, step=0.5,
+                                value=4.0, step=0.5,
                             )
                         with gr.Row():
                             seed = gr.Number(label="Seed", value=42, precision=0)

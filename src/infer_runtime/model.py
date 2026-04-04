@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
-import gc
+import io
 import os
 
 import numpy as np
@@ -24,6 +25,7 @@ from modules.utils.logging import get_logger
 logger = get_logger()
 
 _FP8_DTYPES = (torch.float8_e4m3fn, torch.float8_e5m2)
+_SRC_DIR = str(Path(__file__).resolve().parent.parent)
 
 
 def _patch_fp8_forward(model: nn.Module, compute_dtype: torch.dtype) -> int:
@@ -81,7 +83,8 @@ class EditModel:
 
     - **high_vram**: all models resident on GPU (~48 GB+)
     - **offloading** (default): models on CPU, swung to GPU per-phase
-    - **lod** (load-on-demand): models loaded from disk each run, deleted after
+    - **lod** (load-on-demand): spawns a worker process per-run, kills it
+      after to guarantee full VRAM/RAM reclamation by the OS
     """
 
     def __init__(
@@ -107,7 +110,8 @@ class EditModel:
             self.cfg.use_fsdp_inference = True
 
         if self.lod:
-            logger.info("LOD mode: models will be loaded from disk on demand per-run")
+            logger.info("LOD mode: worker process will be spawned per-run "
+                        "(killed after to fully free all memory)")
             self.dit = None
             self.pipeline = None
             return
@@ -131,30 +135,9 @@ class EditModel:
         logger.info(f"Loading pipeline components to {load_device}")
         self.pipeline = load_pipeline(self.cfg, self.dit, load_device)
 
-    def _load_pipeline_for_lod(self):
-        """Build the full pipeline from disk → CPU for a single LOD run."""
-        cpu = torch.device('cpu')
-        logger.info("LOD: Loading DiT from disk → CPU")
-        dit = load_dit(self.cfg, device=cpu)
-        dit.requires_grad_(False)
-        dit.eval()
-
-        compute_dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
-        n = _patch_fp8_forward(dit, compute_dtype)
-        if n > 0:
-            logger.info(f"LOD: Patched {n} modules for FP8→{compute_dtype} forward")
-
-        logger.info("LOD: Loading pipeline components from disk → CPU")
-        pipeline = load_pipeline(self.cfg, dit, cpu)
-        return dit, pipeline
-
-    def _destroy_lod_pipeline(self, dit, pipeline):
-        """Fully delete all models and reclaim memory."""
-        del pipeline
-        del dit
-        gc.collect()
-        torch.cuda.empty_cache()
-        logger.info("LOD: All models unloaded from memory")
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def maybe_rewrite_prompt(self, prompt: str, image: Optional[Image.Image], enabled: bool) -> str:
         if not enabled:
@@ -183,6 +166,77 @@ class EditModel:
         except Exception:
             self._emergency_offload()
             raise
+
+    # ------------------------------------------------------------------
+    # LOD path: spawn worker → load → infer → kill (true VRAM cleanup)
+    # ------------------------------------------------------------------
+
+    def _infer_lod(self, params: InferenceParams) -> Image.Image:
+        import multiprocessing as mp
+        from infer_runtime.lod_worker import run_lod_inference
+
+        ctx = mp.get_context("spawn")
+        parent_conn, child_conn = ctx.Pipe()
+
+        image_bytes = None
+        if params.image is not None:
+            buf = io.BytesIO()
+            params.image.save(buf, format="PNG")
+            image_bytes = buf.getvalue()
+
+        params_dict = {
+            "prompt": params.prompt,
+            "image_bytes": image_bytes,
+            "height": params.height,
+            "width": params.width,
+            "steps": params.steps,
+            "guidance_scale": params.guidance_scale,
+            "seed": params.seed,
+            "neg_prompt": params.neg_prompt,
+            "basesize": params.basesize,
+        }
+
+        worker = ctx.Process(
+            target=run_lod_inference,
+            args=(
+                child_conn,
+                _SRC_DIR,
+                self.settings.config_path,
+                self.settings.ckpt_path,
+                self.settings.full_precision,
+                str(self.device),
+                params_dict,
+            ),
+        )
+        worker.start()
+        logger.info(f"LOD: spawned worker (PID {worker.pid})")
+
+        try:
+            if not parent_conn.poll(timeout=600):
+                raise TimeoutError("LOD worker timed out (10 min)")
+            status, data = parent_conn.recv()
+        finally:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+            if worker.is_alive():
+                worker.kill()
+                worker.join()
+            parent_conn.close()
+
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                logger.info(f"LOD: worker killed — VRAM after cleanup: {allocated:.2f} GB")
+            else:
+                logger.info("LOD: worker killed, memory freed")
+
+        if status == "success":
+            return Image.open(io.BytesIO(data))
+        raise RuntimeError(f"LOD worker error:\n{data}")
+
+    # ------------------------------------------------------------------
+    # Emergency offload (for the resident-model paths)
+    # ------------------------------------------------------------------
 
     def _emergency_offload(self) -> None:
         """Move all pipeline components back to CPU after a failed generation."""
@@ -227,28 +281,11 @@ class EditModel:
         return Image.fromarray(image_tensor.permute(1, 2, 0).numpy())
 
     # ------------------------------------------------------------------
-    # LOD path: load from disk → offload infer → delete everything
-    # ------------------------------------------------------------------
-
-    def _infer_lod(self, params: InferenceParams) -> Image.Image:
-        dit, pipeline = self._load_pipeline_for_lod()
-        try:
-            result = self._run_offload_inference(pipeline, params)
-        except Exception:
-            self._destroy_lod_pipeline(dit, pipeline)
-            raise
-        self._destroy_lod_pipeline(dit, pipeline)
-        return result
-
-    # ------------------------------------------------------------------
     # Offloading path: swing components in/out of VRAM
     # ------------------------------------------------------------------
 
     def _infer_offload(self, params: InferenceParams) -> Image.Image:
-        return self._run_offload_inference(self.pipeline, params)
-
-    def _run_offload_inference(self, pipe, params: InferenceParams) -> Image.Image:
-        """Core offloading inference used by both offload and LOD modes."""
+        pipe = self.pipeline
         gpu = self.device
         cpu = torch.device('cpu')
         dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
