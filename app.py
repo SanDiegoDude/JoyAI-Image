@@ -213,7 +213,7 @@ def build_ui() -> gr.Blocks:
                             seed = gr.Number(label="Seed", value=42, precision=0)
                             basesize = gr.Dropdown(
                                 label="Base Size (edit mode)",
-                                choices=[256, 512, 768, 1024],
+                                choices=[256, 512, 768, 1024, 1280, 1536, 1792, 2048],
                                 value=1024,
                             )
                         with gr.Accordion("Text-to-Image Dimensions", open=False):
