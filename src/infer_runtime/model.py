@@ -249,6 +249,7 @@ class EditModel:
         if pipe is None:
             return
         nf4 = getattr(self.cfg, 'nf4_dit', False)
+        import gc
         for name in ('text_encoder', 'transformer', 'vae'):
             if name == 'transformer' and nf4:
                 continue
@@ -257,7 +258,8 @@ class EditModel:
                 try:
                     component.to(cpu)
                 except Exception:
-                    pass
+                    setattr(pipe, name, None)
+                    gc.collect()
         torch.cuda.empty_cache()
         logger.info("Emergency offload: all components moved to CPU")
 
@@ -304,6 +306,21 @@ class EditModel:
 
         # ---- Phase 1: Text Encoding (text_encoder → GPU) ----
         logger.info("Phase 1/4: Text encoding")
+        te_needs_reload = pipe.text_encoder is None
+        if te_needs_reload:
+            logger.info("  Reloading text encoder (was freed after previous run)")
+            from modules.models.mmdit.text_encoder import load_text_encoder
+            from modules.utils.utils import build_from_config
+            from modules.utils.constants import PRECISION_TO_TYPE as P2T
+            vlm_bits = getattr(self.cfg, 'vlm_bits', 16)
+            te_kwargs = {
+                'torch_dtype': P2T[self.cfg.text_encoder_precision],
+                'device': gpu,
+                'vlm_bits': vlm_bits,
+            }
+            pipe.tokenizer, pipe.text_encoder = build_from_config(
+                self.cfg.text_encoder_arch_config, **te_kwargs)
+
         te_movable = True
         try:
             pipe.text_encoder.to(gpu)
@@ -346,6 +363,11 @@ class EditModel:
             prompt_embeds_mask = prompt_embeds_mask.to(cpu)
         if te_movable:
             pipe.text_encoder.to(cpu)
+        else:
+            import gc
+            logger.info("  Freeing immovable text encoder from GPU (will reload next run)")
+            pipe.text_encoder = None
+            gc.collect()
         torch.cuda.empty_cache()
 
         # ---- Phase 2: VAE condition encode (VAE → GPU if editing) ----
