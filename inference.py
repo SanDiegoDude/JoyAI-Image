@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--lod', action='store_true',
                         help='Load-on-demand: load models from disk each run, delete after. '
                              'Lightest memory, slowest inference.')
+    vlm_group = parser.add_mutually_exclusive_group()
+    vlm_group.add_argument('--4bit-vlm', action='store_true', dest='vlm_4bit',
+                           help='Quantize text encoder to 4-bit NF4 (lowest VRAM, ~4.4 GB).')
+    vlm_group.add_argument('--16bit-vlm', action='store_true', dest='vlm_16bit',
+                           help='Load text encoder in full bf16 (~17.5 GB).')
     return parser.parse_args()
 
 
@@ -83,6 +88,13 @@ def main() -> None:
     try:
         ensure_checkpoints(args.ckpt_root, full_precision=args.fullprecision)
 
+        if args.vlm_4bit:
+            vlm_bits = 4
+        elif args.vlm_16bit:
+            vlm_bits = 16
+        else:
+            vlm_bits = 8
+
         settings = load_settings(
             ckpt_root=args.ckpt_root,
             config_path=args.config,
@@ -91,6 +103,7 @@ def main() -> None:
             full_precision=args.fullprecision,
             high_vram=args.highvram,
             lod=args.lod,
+            vlm_bits=vlm_bits,
         )
         device = resolve_device()
         dist_initialized = maybe_init_distributed()
@@ -107,7 +120,8 @@ def main() -> None:
             print(f'Attention backend: {describe_attention_backend()}')
             print(f'Config path: {settings.config_path}')
             print(f'Checkpoint path: {settings.ckpt_path}')
-            print(f'Model precision: {mode} | Memory mode: {vram}')
+            vlm_label = f"{vlm_bits}-bit" if vlm_bits < 16 else "bf16"
+            print(f'Model precision: {mode} | Memory mode: {vram} | VLM: {vlm_label}')
             if args.hsdp_shard_dim is not None:
                 print(f'Override hsdp_shard_dim: {args.hsdp_shard_dim}')
 

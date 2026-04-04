@@ -15,7 +15,9 @@ from modules.utils.constants import PRECISION_TO_TYPE
 from modules.utils.utils import build_from_config
 
 
-def load_pipeline(cfg, dit, device: torch.device):
+def load_pipeline(cfg, dit, device: torch.device, gpu_device: torch.device | None = None):
+    logger = get_logger()
+
     # vae
     factory_kwargs = {
         'torch_dtype': PRECISION_TO_TYPE[cfg.vae_precision], "device": device}
@@ -23,11 +25,26 @@ def load_pipeline(cfg, dit, device: torch.device):
     if getattr(cfg.vae_arch_config, "enable_feature_caching", False):
         vae.enable_feature_caching()
 
-    # text_encoder
-    factory_kwargs = {
-        'torch_dtype': PRECISION_TO_TYPE[cfg.text_encoder_precision], "device": device}
+    # text_encoder — bnb quantization needs CUDA during loading
+    vlm_bits = getattr(cfg, "vlm_bits", 16)
+    if vlm_bits < 16 and device.type != "cuda":
+        te_load_device = gpu_device or torch.device("cuda:0")
+    else:
+        te_load_device = device
+
+    te_kwargs = {
+        'torch_dtype': PRECISION_TO_TYPE[cfg.text_encoder_precision],
+        "device": te_load_device,
+        "vlm_bits": vlm_bits,
+    }
+    logger.info(f"Loading text encoder ({vlm_bits}-bit) to {te_load_device}")
     tokenizer, text_encoder = build_from_config(
-        cfg.text_encoder_arch_config, **factory_kwargs)
+        cfg.text_encoder_arch_config, **te_kwargs)
+
+    if vlm_bits < 16 and device.type != "cuda":
+        logger.info("Moving quantized text encoder to CPU for offload mode")
+        text_encoder.to("cpu")
+        torch.cuda.empty_cache()
 
     # scheduler
     scheduler = build_from_config(cfg.scheduler_arch_config)
@@ -41,7 +58,12 @@ def load_pipeline(cfg, dit, device: torch.device):
         args=cfg,
     )
 
-    pipeline = pipeline.to(device)
+    if vlm_bits >= 16:
+        pipeline = pipeline.to(device)
+    else:
+        pipeline.vae.to(device)
+        pipeline.transformer.to(device)
+
     return pipeline
 
 

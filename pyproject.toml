@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 dependencies = [
     "accelerate",
+    "bitsandbytes",
     "diffusers>=0.34.0",
     "einops",
     "flask",

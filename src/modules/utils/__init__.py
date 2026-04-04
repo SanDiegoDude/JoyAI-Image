@@ -11,6 +11,7 @@ import torch.distributed as dist
 
 def seed_everything(seed: int | None = None) -> None:
     if seed is not None:
+        seed = int(seed) & 0xFFFFFFFF
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)

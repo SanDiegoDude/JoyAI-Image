@@ -21,6 +21,7 @@ class InferConfig:
     text_encoder_arch_config: dict[str, Any] | None = None
     text_encoder_precision: str = "bf16"
     text_token_max_length: int = 2048
+    vlm_bits: int = 16
 
     scheduler_arch_config: dict[str, Any] | None = None
 

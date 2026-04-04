@@ -103,6 +103,7 @@ class EditModel:
         self.cfg: InferConfig = config_class()
         self.cfg.dit_ckpt = settings.ckpt_path
         self.cfg.full_precision = settings.full_precision
+        self.cfg.vlm_bits = settings.vlm_bits
         self.cfg.training_mode = False
         if hsdp_shard_dim_override is not None:
             self.cfg.hsdp_shard_dim = hsdp_shard_dim_override
@@ -133,7 +134,7 @@ class EditModel:
                 logger.info(f"Patched {n} modules for FP8→{compute_dtype} forward")
 
         logger.info(f"Loading pipeline components to {load_device}")
-        self.pipeline = load_pipeline(self.cfg, self.dit, load_device)
+        self.pipeline = load_pipeline(self.cfg, self.dit, load_device, gpu_device=self.device)
 
     # ------------------------------------------------------------------
     # Public API
@@ -206,6 +207,7 @@ class EditModel:
                 self.settings.full_precision,
                 str(self.device),
                 params_dict,
+                self.settings.vlm_bits,
             ),
         )
         worker.start()

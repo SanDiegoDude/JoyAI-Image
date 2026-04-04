@@ -61,6 +61,13 @@ def _load_models() -> None:
         high_vram = _cli_args.highvram if _cli_args else False
         lod = _cli_args.lod if _cli_args else False
 
+        if _cli_args and _cli_args.vlm_4bit:
+            vlm_bits = 4
+        elif _cli_args and _cli_args.vlm_16bit:
+            vlm_bits = 16
+        else:
+            vlm_bits = 8
+
         _log("Checking / downloading checkpoints...")
         ensure_checkpoints(CKPT_ROOT, full_precision=full_prec)
 
@@ -71,6 +78,7 @@ def _load_models() -> None:
             full_precision=full_prec,
             high_vram=high_vram,
             lod=lod,
+            vlm_bits=vlm_bits,
         )
         mode = "bf16" if full_prec else "FP8"
         if lod:
@@ -79,9 +87,10 @@ def _load_models() -> None:
             vram_label = "high-VRAM"
         else:
             vram_label = "offloading"
+        vlm_label = f"{vlm_bits}-bit" if vlm_bits < 16 else "bf16"
         _log(f"Config: {settings.config_path}")
         _log(f"Checkpoint: {settings.ckpt_path}")
-        _log(f"Precision: {mode} | Memory: {vram_label}")
+        _log(f"Precision: {mode} | Memory: {vram_label} | VLM: {vlm_label}")
 
         if torch.cuda.is_available():
             device = torch.device("cuda:0")
@@ -225,7 +234,7 @@ def _build_api_app(api_port: int):
             neg_prompt = data.get("negative_prompt", "").strip()
             steps = int(data.get("steps", 18))
             guidance_scale = float(data.get("guidance_scale", 4.0))
-            seed = int(data.get("seed", 42)) & 0x7FFFFFFFFFFFFFFF
+            seed = int(data.get("seed", 42)) & 0xFFFFFFFF
             save_image = bool(data.get("save_image", False))
 
             input_image = None
@@ -433,6 +442,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--lod', action='store_true',
                         help='Load-on-demand: load models from disk each run, '
                              'delete after. Lightest memory, slowest inference.')
+    vlm_group = parser.add_mutually_exclusive_group()
+    vlm_group.add_argument('--4bit-vlm', action='store_true', dest='vlm_4bit',
+                           help='Quantize text encoder to 4-bit NF4 (lowest VRAM, ~4.4 GB).')
+    vlm_group.add_argument('--16bit-vlm', action='store_true', dest='vlm_16bit',
+                           help='Load text encoder in full bf16 (~17.5 GB).')
     parser.add_argument('--port', type=int, default=7860,
                         help='Port for Gradio UI (default: 7860).')
     parser.add_argument('--api', nargs='?', const=7500, type=int, default=None,
@@ -471,7 +485,14 @@ def main() -> None:
         vram_label = "high-VRAM"
     else:
         vram_label = "offloading"
-    _log(f"Config: precision={mode}, memory={vram_label}")
+    if _cli_args.vlm_4bit:
+        vlm_b = 4
+    elif _cli_args.vlm_16bit:
+        vlm_b = 16
+    else:
+        vlm_b = 8
+    vlm_label = f"{vlm_b}-bit" if vlm_b < 16 else "bf16"
+    _log(f"Config: precision={mode}, memory={vram_label}, VLM={vlm_label}")
 
     if headless:
         print(f"Running in headless API mode (no Gradio)", flush=True)

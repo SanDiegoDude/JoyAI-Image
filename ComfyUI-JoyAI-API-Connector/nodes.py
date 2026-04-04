@@ -31,7 +31,7 @@ class JoyAIImageGenerate:
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "steps": ("INT", {"default": 18, "min": 1, "max": 100, "step": 1}),
                 "guidance_scale": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 20.0, "step": 0.5}),
-                "seed": ("INT", {"default": 42, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
+                "seed": ("INT", {"default": 42, "min": 0, "max": 0xFFFFFFFF}),
                 "width": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 16,
                                   "tooltip": "T2I width (ignored when input_image is connected)"}),
                 "height": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 16,
