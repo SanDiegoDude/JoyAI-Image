@@ -215,75 +215,79 @@ def _build_api_app(api_port: int):
         if model is None:
             return jsonify({"error": "Model failed to load"}), 500
 
-        data = request.get_json(force=True)
-
-        prompt = data.get("prompt", "").strip()
-        if not prompt:
-            return jsonify({"error": "prompt is required"}), 400
-
-        neg_prompt = data.get("negative_prompt", "").strip()
-        steps = int(data.get("steps", 18))
-        guidance_scale = float(data.get("guidance_scale", 4.0))
-        seed = int(data.get("seed", 42))
-        save_image = bool(data.get("save_image", False))
-
-        input_image = None
-        input_b64 = data.get("input_image")
-        if input_b64:
-            img_bytes = base64.b64decode(input_b64)
-            input_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-
-        if input_image is not None:
-            basesize = int(data.get("edit_base_size", 1024))
-            if basesize % 256 != 0 or basesize < 256:
-                return jsonify({"error": "edit_base_size must be a positive multiple of 256"}), 400
-            height = 0
-            width = 0
-        else:
-            basesize = 1024
-            width = _snap_dim(int(data.get("width", 1024)))
-            height = _snap_dim(int(data.get("height", 1024)))
-
-        from infer_runtime.model import InferenceParams
-        params = InferenceParams(
-            prompt=prompt,
-            image=input_image,
-            height=height,
-            width=width,
-            steps=steps,
-            guidance_scale=guidance_scale,
-            seed=seed,
-            neg_prompt=neg_prompt,
-            basesize=basesize,
-        )
-
-        t0 = time.time()
         try:
+            data = request.get_json(force=True)
+
+            prompt = data.get("prompt", "").strip()
+            if not prompt:
+                return jsonify({"error": "prompt is required"}), 400
+
+            neg_prompt = data.get("negative_prompt", "").strip()
+            steps = int(data.get("steps", 18))
+            guidance_scale = float(data.get("guidance_scale", 4.0))
+            seed = int(data.get("seed", 42)) & 0x7FFFFFFFFFFFFFFF
+            save_image = bool(data.get("save_image", False))
+
+            input_image = None
+            input_b64 = data.get("input_image")
+            if input_b64:
+                img_bytes = base64.b64decode(input_b64)
+                input_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+            if input_image is not None:
+                basesize = int(data.get("edit_base_size", 1024))
+                if basesize % 256 != 0 or basesize < 256:
+                    return jsonify({"error": "edit_base_size must be a positive multiple of 256"}), 400
+                height = 0
+                width = 0
+            else:
+                basesize = 1024
+                width = _snap_dim(int(data.get("width", 1024)))
+                height = _snap_dim(int(data.get("height", 1024)))
+
+            from infer_runtime.model import InferenceParams
+            params = InferenceParams(
+                prompt=prompt,
+                image=input_image,
+                height=height,
+                width=width,
+                steps=steps,
+                guidance_scale=guidance_scale,
+                seed=seed,
+                neg_prompt=neg_prompt,
+                basesize=basesize,
+            )
+
+            t0 = time.time()
             result = model.infer(params)
+            elapsed = time.time() - t0
+
+            buf = io.BytesIO()
+            result.save(buf, format="PNG")
+            result_b64 = base64.b64encode(buf.getvalue()).decode()
+
+            response = {
+                "image": result_b64,
+                "seed": seed,
+                "elapsed": round(elapsed, 2),
+                "width": result.width,
+                "height": result.height,
+            }
+
+            if save_image:
+                OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                filename = f"{int(time.time())}_{int(seed)}.png"
+                save_path = OUTPUT_DIR / filename
+                result.save(save_path)
+                response["saved_path"] = str(save_path)
+
+            return jsonify(response)
+
         except Exception as e:
+            import traceback
+            print(f"[API] Error: {e}", flush=True)
+            traceback.print_exc()
             return jsonify({"error": str(e)}), 500
-        elapsed = time.time() - t0
-
-        buf = io.BytesIO()
-        result.save(buf, format="PNG")
-        result_b64 = base64.b64encode(buf.getvalue()).decode()
-
-        response = {
-            "image": result_b64,
-            "seed": seed,
-            "elapsed": round(elapsed, 2),
-            "width": result.width,
-            "height": result.height,
-        }
-
-        if save_image:
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            filename = f"{int(time.time())}_{int(seed)}.png"
-            save_path = OUTPUT_DIR / filename
-            result.save(save_path)
-            response["saved_path"] = str(save_path)
-
-        return jsonify(response)
 
     @api.route("/status", methods=["GET"])
     def status():
