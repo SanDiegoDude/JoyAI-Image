@@ -370,6 +370,22 @@ def _load_nf4_fast(model: torch.nn.Module, nf4_path: str, device: torch.device, 
     return model
 
 
+def _force_torch_spda(model: torch.nn.Module, logger) -> None:
+    """Override attn_backend to torch_spda on all submodules.
+
+    Flash Attention only supports fp16/bf16 data types and will error
+    on the uint8 packed weights that NF4 quantization produces.
+    """
+    patched = 0
+    for module in model.modules():
+        if hasattr(module, 'attn_backend') and module.attn_backend != 'torch_spda':
+            module.attn_backend = 'torch_spda'
+            patched += 1
+    if patched:
+        logger.info(f"NF4 DiT: forced torch_spda attention on {patched} modules "
+                     "(flash_attn incompatible with NF4)")
+
+
 def _load_dit_nf4(cfg, target_device: torch.device, gpu_device: torch.device | None, logger) -> torch.nn.Module:
     """Load DiT with NF4 quantization via bitsandbytes.
 
@@ -426,6 +442,8 @@ def _load_dit_nf4(cfg, target_device: torch.device, gpu_device: torch.device | N
 
         logger.info(f"NF4 DiT: quantizing on {gpu}...")
         _quantize_nf4_on_gpu(model, gpu)
+
+    _force_torch_spda(model, logger)
 
     if torch.cuda.is_available():
         nf4_gb = torch.cuda.memory_allocated(gpu) / 1024**3
