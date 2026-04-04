@@ -43,7 +43,9 @@ def ensure_checkpoints(
         _write_default_config(config_file)
         logger.info("Generated infer_config.py at %s", config_file)
 
-    if has_transformer and has_vae and has_text_encoder:
+    needs_nf4 = nf4_dit and not (transformer_dir / "transformer_nf4.safetensors").exists()
+
+    if has_transformer and has_vae and has_text_encoder and not needs_nf4:
         return root
 
     from huggingface_hub import hf_hub_download, snapshot_download
@@ -64,18 +66,16 @@ def ensure_checkpoints(
                 local_dir=str(root),
             )
 
-    if nf4_dit:
-        nf4_file = transformer_dir / "transformer_nf4.safetensors"
-        if not nf4_file.exists():
-            logger.info("Downloading pre-quantized NF4 transformer from %s ...", HF_REPO_NF4)
-            try:
-                hf_hub_download(
-                    HF_REPO_NF4,
-                    "transformer/transformer_nf4.safetensors",
-                    local_dir=str(root),
-                )
-            except Exception as e:
-                logger.warning("NF4 download failed (%s) — will fall back to runtime quantization", e)
+    if needs_nf4:
+        logger.info("Downloading pre-quantized NF4 transformer from %s ...", HF_REPO_NF4)
+        try:
+            hf_hub_download(
+                HF_REPO_NF4,
+                "transformer/transformer_nf4.safetensors",
+                local_dir=str(root),
+            )
+        except Exception as e:
+            logger.warning("NF4 download failed (%s) — will fall back to runtime quantization", e)
 
     if not has_vae:
         logger.info("Downloading VAE from %s ...", HF_REPO_FULL)
