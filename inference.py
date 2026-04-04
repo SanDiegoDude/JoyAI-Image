@@ -44,6 +44,9 @@ def parse_args() -> argparse.Namespace:
                         help='Use bf16 weights instead of FP8. Downloads the full-precision model if needed.')
     parser.add_argument('--highvram', action='store_true',
                         help='Keep all models in VRAM (needs ~48 GB+). Default swings components in/out.')
+    parser.add_argument('--lod', action='store_true',
+                        help='Load-on-demand: load models from disk each run, delete after. '
+                             'Lightest memory, slowest inference.')
     return parser.parse_args()
 
 
@@ -87,13 +90,19 @@ def main() -> None:
             default_seed=args.seed,
             full_precision=args.fullprecision,
             high_vram=args.highvram,
+            lod=args.lod,
         )
         device = resolve_device()
         dist_initialized = maybe_init_distributed()
 
         if is_rank0():
             mode = "bf16" if args.fullprecision else "FP8"
-            vram = "high-VRAM (all in GPU)" if args.highvram else "offloading (low-VRAM)"
+            if args.lod:
+                vram = "LOD (load-on-demand)"
+            elif args.highvram:
+                vram = "high-VRAM (all in GPU)"
+            else:
+                vram = "offloading (low-VRAM)"
             print(f'Chosen device: {device}')
             print(f'Attention backend: {describe_attention_backend()}')
             print(f'Config path: {settings.config_path}')

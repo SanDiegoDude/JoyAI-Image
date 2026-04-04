@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import os
 import sys
 import time
@@ -57,6 +59,7 @@ def _load_models() -> None:
 
         full_prec = _cli_args.fullprecision if _cli_args else False
         high_vram = _cli_args.highvram if _cli_args else False
+        lod = _cli_args.lod if _cli_args else False
 
         _log("Checking / downloading checkpoints...")
         ensure_checkpoints(CKPT_ROOT, full_precision=full_prec)
@@ -67,12 +70,18 @@ def _load_models() -> None:
             default_seed=DEFAULT_SEED,
             full_precision=full_prec,
             high_vram=high_vram,
+            lod=lod,
         )
         mode = "bf16" if full_prec else "FP8"
-        vram = "high-VRAM" if high_vram else "offloading"
+        if lod:
+            vram_label = "LOD (load-on-demand)"
+        elif high_vram:
+            vram_label = "high-VRAM"
+        else:
+            vram_label = "offloading"
         _log(f"Config: {settings.config_path}")
         _log(f"Checkpoint: {settings.ckpt_path}")
-        _log(f"Precision: {mode} | Memory: {vram}")
+        _log(f"Precision: {mode} | Memory: {vram_label}")
 
         if torch.cuda.is_available():
             device = torch.device("cuda:0")
@@ -178,6 +187,109 @@ def generate(
 
 def poll_log() -> str:
     return _get_log_text()
+
+
+# ---------------------------------------------------------------------------
+# REST API
+# ---------------------------------------------------------------------------
+
+def _build_api_app(api_port: int):
+    """Build a Flask API server."""
+    from flask import Flask, request, jsonify
+
+    api = Flask(__name__)
+
+    @api.route("/health", methods=["GET"])
+    def health():
+        ready = _model_ready.is_set()
+        with _model_lock:
+            loaded = _model is not None
+        return jsonify({"ready": ready and loaded, "loading": not ready})
+
+    @api.route("/generate", methods=["POST"])
+    def api_generate():
+        if not _model_ready.is_set():
+            return jsonify({"error": "Models are still loading"}), 503
+        with _model_lock:
+            model = _model
+        if model is None:
+            return jsonify({"error": "Model failed to load"}), 500
+
+        data = request.get_json(force=True)
+
+        prompt = data.get("prompt", "").strip()
+        if not prompt:
+            return jsonify({"error": "prompt is required"}), 400
+
+        neg_prompt = data.get("negative_prompt", "").strip()
+        steps = int(data.get("steps", 30))
+        guidance_scale = float(data.get("guidance_scale", 5.0))
+        seed = int(data.get("seed", 42))
+        save_image = bool(data.get("save_image", False))
+
+        input_image = None
+        input_b64 = data.get("input_image")
+        if input_b64:
+            img_bytes = base64.b64decode(input_b64)
+            input_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+        if input_image is not None:
+            basesize = int(data.get("edit_base_size", 1024))
+            if basesize % 256 != 0 or basesize < 256:
+                return jsonify({"error": "edit_base_size must be a positive multiple of 256"}), 400
+            height = 0
+            width = 0
+        else:
+            basesize = 1024
+            width = _snap_dim(int(data.get("width", 1024)))
+            height = _snap_dim(int(data.get("height", 1024)))
+
+        from infer_runtime.model import InferenceParams
+        params = InferenceParams(
+            prompt=prompt,
+            image=input_image,
+            height=height,
+            width=width,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            seed=seed,
+            neg_prompt=neg_prompt,
+            basesize=basesize,
+        )
+
+        t0 = time.time()
+        try:
+            result = model.infer(params)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        elapsed = time.time() - t0
+
+        buf = io.BytesIO()
+        result.save(buf, format="PNG")
+        result_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        response = {
+            "image": result_b64,
+            "seed": seed,
+            "elapsed": round(elapsed, 2),
+            "width": result.width,
+            "height": result.height,
+        }
+
+        if save_image:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            filename = f"{int(time.time())}_{int(seed)}.png"
+            save_path = OUTPUT_DIR / filename
+            result.save(save_path)
+            response["saved_path"] = str(save_path)
+
+        return jsonify(response)
+
+    @api.route("/status", methods=["GET"])
+    def status():
+        return jsonify({"log": _get_log_text()})
+
+    return api
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +426,25 @@ def parse_args() -> argparse.Namespace:
                         help='Use bf16 weights instead of FP8.')
     parser.add_argument('--highvram', action='store_true',
                         help='Keep all models in VRAM (needs ~48 GB+).')
-    parser.add_argument('--port', type=int, default=7860)
+    parser.add_argument('--lod', action='store_true',
+                        help='Load-on-demand: load models from disk each run, '
+                             'delete after. Lightest memory, slowest inference.')
+    parser.add_argument('--port', type=int, default=7860,
+                        help='Port for Gradio UI (default: 7860).')
+    parser.add_argument('--api', nargs='?', const=7500, type=int, default=None,
+                        metavar='PORT',
+                        help='Start REST API server. Optional port (default: 7500).')
+    parser.add_argument('--headless-api', nargs='?', const=7500, type=int,
+                        default=None, metavar='PORT',
+                        help='Start REST API only (no Gradio). Optional port (default: 7500).')
     return parser.parse_args()
+
+
+def _start_api_server(port: int) -> None:
+    """Launch the Flask API in a background thread."""
+    api = _build_api_app(port)
+    print(f"[API] Starting REST API on http://0.0.0.0:{port}", flush=True)
+    api.run(host="0.0.0.0", port=port, threaded=True)
 
 
 def main() -> None:
@@ -323,21 +452,39 @@ def main() -> None:
     _cli_args = parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    app = build_ui()
+
+    headless = _cli_args.headless_api is not None
+    api_port = _cli_args.headless_api if headless else _cli_args.api
 
     load_thread = threading.Thread(target=_load_models, daemon=True)
     load_thread.start()
     _log("Model loading started in background...")
-    mode = "bf16" if _cli_args.fullprecision else "FP8"
-    vram = "high-VRAM" if _cli_args.highvram else "offloading"
-    _log(f"Config: precision={mode}, memory={vram}")
 
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=_cli_args.port,
-        share=False,
-        show_error=True,
-    )
+    mode = "bf16" if _cli_args.fullprecision else "FP8"
+    if _cli_args.lod:
+        vram_label = "LOD (load-on-demand)"
+    elif _cli_args.highvram:
+        vram_label = "high-VRAM"
+    else:
+        vram_label = "offloading"
+    _log(f"Config: precision={mode}, memory={vram_label}")
+
+    if headless:
+        print(f"Running in headless API mode (no Gradio)", flush=True)
+        _start_api_server(api_port)
+    else:
+        if api_port is not None:
+            api_thread = threading.Thread(
+                target=_start_api_server, args=(api_port,), daemon=True)
+            api_thread.start()
+
+        app = build_ui()
+        app.launch(
+            server_name="0.0.0.0",
+            server_port=_cli_args.port,
+            share=False,
+            show_error=True,
+        )
 
 
 if __name__ == "__main__":

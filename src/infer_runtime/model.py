@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import gc
 import os
 
 import numpy as np
@@ -76,6 +77,13 @@ class InferenceParams:
 
 
 class EditModel:
+    """Unified inference wrapper supporting three memory strategies:
+
+    - **high_vram**: all models resident on GPU (~48 GB+)
+    - **offloading** (default): models on CPU, swung to GPU per-phase
+    - **lod** (load-on-demand): models loaded from disk each run, deleted after
+    """
+
     def __init__(
         self,
         settings: InferSettings,
@@ -85,6 +93,7 @@ class EditModel:
         self.settings = settings
         self.device = device
         self.high_vram = settings.high_vram
+        self.lod = settings.lod
         self._rewrite_cache: dict[str, str] = {}
 
         config_class = load_infer_config_class_from_pyfile(settings.config_path)
@@ -96,6 +105,12 @@ class EditModel:
             self.cfg.hsdp_shard_dim = hsdp_shard_dim_override
         if int(os.environ.get('WORLD_SIZE', '1')) > 1 and self.cfg.hsdp_shard_dim > 1:
             self.cfg.use_fsdp_inference = True
+
+        if self.lod:
+            logger.info("LOD mode: models will be loaded from disk on demand per-run")
+            self.dit = None
+            self.pipeline = None
+            return
 
         if self.high_vram:
             load_device = self.device
@@ -116,6 +131,31 @@ class EditModel:
         logger.info(f"Loading pipeline components to {load_device}")
         self.pipeline = load_pipeline(self.cfg, self.dit, load_device)
 
+    def _load_pipeline_for_lod(self):
+        """Build the full pipeline from disk → CPU for a single LOD run."""
+        cpu = torch.device('cpu')
+        logger.info("LOD: Loading DiT from disk → CPU")
+        dit = load_dit(self.cfg, device=cpu)
+        dit.requires_grad_(False)
+        dit.eval()
+
+        compute_dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
+        n = _patch_fp8_forward(dit, compute_dtype)
+        if n > 0:
+            logger.info(f"LOD: Patched {n} modules for FP8→{compute_dtype} forward")
+
+        logger.info("LOD: Loading pipeline components from disk → CPU")
+        pipeline = load_pipeline(self.cfg, dit, cpu)
+        return dit, pipeline
+
+    def _destroy_lod_pipeline(self, dit, pipeline):
+        """Fully delete all models and reclaim memory."""
+        del pipeline
+        del dit
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("LOD: All models unloaded from memory")
+
     def maybe_rewrite_prompt(self, prompt: str, image: Optional[Image.Image], enabled: bool) -> str:
         if not enabled:
             return str(prompt or '')
@@ -134,6 +174,8 @@ class EditModel:
 
     @torch.no_grad()
     def infer(self, params: InferenceParams) -> Image.Image:
+        if self.lod:
+            return self._infer_lod(params)
         if self.high_vram:
             return self._infer_highvram(params)
         try:
@@ -146,6 +188,8 @@ class EditModel:
         """Move all pipeline components back to CPU after a failed generation."""
         cpu = torch.device('cpu')
         pipe = self.pipeline
+        if pipe is None:
+            return
         for name in ('text_encoder', 'transformer', 'vae'):
             component = getattr(pipe, name, None)
             if component is not None:
@@ -183,11 +227,28 @@ class EditModel:
         return Image.fromarray(image_tensor.permute(1, 2, 0).numpy())
 
     # ------------------------------------------------------------------
+    # LOD path: load from disk → offload infer → delete everything
+    # ------------------------------------------------------------------
+
+    def _infer_lod(self, params: InferenceParams) -> Image.Image:
+        dit, pipeline = self._load_pipeline_for_lod()
+        try:
+            result = self._run_offload_inference(pipeline, params)
+        except Exception:
+            self._destroy_lod_pipeline(dit, pipeline)
+            raise
+        self._destroy_lod_pipeline(dit, pipeline)
+        return result
+
+    # ------------------------------------------------------------------
     # Offloading path: swing components in/out of VRAM
     # ------------------------------------------------------------------
 
     def _infer_offload(self, params: InferenceParams) -> Image.Image:
-        pipe = self.pipeline
+        return self._run_offload_inference(self.pipeline, params)
+
+    def _run_offload_inference(self, pipe, params: InferenceParams) -> Image.Image:
+        """Core offloading inference used by both offload and LOD modes."""
         gpu = self.device
         cpu = torch.device('cpu')
         dtype = PRECISION_TO_TYPE[self.cfg.dit_precision]
@@ -239,7 +300,7 @@ class EditModel:
 
         # ---- Phase 2: VAE condition encode (VAE → GPU if editing) ----
         num_channels_latents = 16
-        latent_t = 1  # single-frame
+        latent_t = 1
         latent_h = height // pipe.vae_scale_factor
         latent_w = width // pipe.vae_scale_factor
         generator = torch.Generator(device=cpu).manual_seed(int(params.seed))

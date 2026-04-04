@@ -13,6 +13,7 @@ dependencies = [
     "accelerate",
     "diffusers>=0.34.0",
     "einops",
+    "flask",
     "gradio",
     "huggingface_hub",
     "loguru",

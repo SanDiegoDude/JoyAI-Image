@@ -16,6 +16,7 @@ class InferSettings:
     default_seed: int
     full_precision: bool = False
     high_vram: bool = False
+    lod: bool = False
 
 
 def load_settings(
@@ -26,6 +27,7 @@ def load_settings(
     default_seed: int = 42,
     full_precision: bool = False,
     high_vram: bool = False,
+    lod: bool = False,
 ) -> InferSettings:
     layout = resolve_checkpoint_layout(ckpt_root)
     default_config = layout.root / 'infer_config.py'
@@ -43,4 +45,5 @@ def load_settings(
         default_seed=default_seed,
         full_precision=full_precision,
         high_vram=high_vram,
+        lod=lod,
     )
