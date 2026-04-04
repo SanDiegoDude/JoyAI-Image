@@ -226,6 +226,7 @@ def build_ui() -> gr.Blocks:
                                 label="Base Size (edit mode)",
                                 choices=[256, 512, 768, 1024, 1280, 1536, 1792, 2048],
                                 value=1024,
+                                info="Must be a multiple of 256",
                             )
                         with gr.Accordion("Text-to-Image Dimensions", open=False):
                             gr.Markdown("*Only used when no input image is provided. All dims snapped to multiples of 16.*")

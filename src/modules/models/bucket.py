@@ -79,8 +79,10 @@ def generate_video_image_bucket(basesize=256, min_temporal=65, max_temporal=129,
     Returns:
         List of (batch_size, num_items, num_frames, height, width) tuples.
     """
-    assert basesize in [
-        256, 512, 768, 1024], f"[generate_video_image_bucket] wrong basesize {basesize}"
+    if basesize % 256 != 0 or basesize < 256:
+        raise ValueError(
+            f"[generate_video_image_bucket] basesize must be a positive multiple of 256, got {basesize}"
+        )
     bucket_list = []
 
     base_bucket_list = _generate_hw_buckets()
