@@ -1,13 +1,18 @@
-accelerate
+# Core dependencies (not typically in ComfyUI)
 bitsandbytes
-diffusers>=0.34.0
-einops
 huggingface_hub
 loguru
-packaging
-pillow
-safetensors
 sentencepiece
-torch
-torchvision
-transformers>=4.57.0,<4.58.0
+
+# Usually already installed by ComfyUI — uncomment if missing:
+# accelerate
+# diffusers>=0.34.0
+# einops
+# packaging
+# pillow
+# safetensors
+# transformers>=4.57.0,<4.58.0
+
+# PyTorch — almost certainly already in your ComfyUI env.
+# If not, install the CUDA version for your driver:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
