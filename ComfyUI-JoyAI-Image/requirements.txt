@@ -1,17 +1,18 @@
-# Core dependencies (not typically in ComfyUI)
+# JoyAI-Image package (provides the inference runtime)
+# Install from the repo into your ComfyUI venv:
+#   cd /path/to/JoyAI-Image && pip install -e .
+#
+# Or install directly from GitHub:
+#   pip install git+https://github.com/SanDiegoDude/JoyAI-Image.git
+
+# Additional dependency not bundled in the base package:
 bitsandbytes
-huggingface_hub
-loguru
-sentencepiece
 
 # Usually already installed by ComfyUI — uncomment if missing:
 # accelerate
-# diffusers>=0.34.0
 # einops
-# packaging
 # pillow
 # safetensors
-# transformers>=4.57.0,<4.58.0
 
 # PyTorch — almost certainly already in your ComfyUI env.
 # If not, install the CUDA version for your driver:

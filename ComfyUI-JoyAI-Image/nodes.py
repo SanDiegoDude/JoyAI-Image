@@ -3,11 +3,13 @@
 Runs the JoyAI-Image pipeline directly inside the ComfyUI process.
 Models are downloaded automatically from HuggingFace on first use and
 kept in memory between runs.
+
+Install the JoyAI-Image package into your ComfyUI venv:
+    cd /path/to/JoyAI-Image && pip install -e .
 """
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import warnings
 
@@ -15,20 +17,23 @@ import numpy as np
 import torch
 from PIL import Image
 
-_THIS_DIR = os.path.dirname(os.path.realpath(__file__))
-_JOYAI_ROOT = os.path.dirname(_THIS_DIR)
-_JOYAI_SRC = os.path.join(_JOYAI_ROOT, "src")
+try:
+    from infer_runtime.download import ensure_checkpoints
+    from infer_runtime.model import build_model, InferenceParams
+    from infer_runtime.settings import load_settings
+    from modules.utils import seed_everything
+except ImportError as _exc:
+    raise ImportError(
+        "\n[JoyAI] Required packages not found. Install the JoyAI-Image "
+        "package into your ComfyUI venv:\n"
+        "    cd /path/to/JoyAI-Image && pip install -e .\n"
+        "  (see ComfyUI-JoyAI-Image/requirements.txt for details)"
+    ) from _exc
 
-if not os.path.isdir(_JOYAI_SRC):
-    raise RuntimeError(
-        f"[JoyAI] Cannot find src/ directory. Expected at: {_JOYAI_SRC}\n"
-        f"  Resolved __file__ to: {os.path.realpath(__file__)}\n"
-        f"  Make sure ComfyUI-JoyAI-Image/ lives inside the JoyAI-Image repo root."
-    )
-
-if _JOYAI_SRC not in sys.path:
-    sys.path.insert(0, _JOYAI_SRC)
-    print(f"[JoyAI] Added to sys.path: {_JOYAI_SRC}")
+_CKPT_ROOT = os.environ.get(
+    "JOYAI_CKPT_ROOT",
+    os.path.join(os.path.expanduser("~"), ".cache", "joyai-image", "ckpts_infer"),
+)
 
 _model = None
 _model_lock = threading.Lock()
@@ -47,15 +52,10 @@ def _get_model(high_vram: bool, vlm_bits: int):
 
         warnings.filterwarnings("ignore")
 
-        from infer_runtime.download import ensure_checkpoints
-        from infer_runtime.model import build_model
-        from infer_runtime.settings import load_settings
-
-        ckpt_root = os.path.join(_JOYAI_ROOT, "ckpts_infer")
-        ensure_checkpoints(ckpt_root, full_precision=False)
+        ensure_checkpoints(_CKPT_ROOT, full_precision=False)
 
         settings = load_settings(
-            ckpt_root=ckpt_root,
+            ckpt_root=_CKPT_ROOT,
             default_seed=42,
             full_precision=False,
             high_vram=high_vram,
@@ -73,6 +73,7 @@ def _get_model(high_vram: bool, vlm_bits: int):
                 torch.cuda.empty_cache()
 
         print(f"[JoyAI] Loading models (high_vram={high_vram}, vlm={vlm_bits}-bit)...")
+        print(f"[JoyAI] Checkpoint root: {_CKPT_ROOT}")
         _model = build_model(settings)
         _current_cfg_key = cfg_key
         print("[JoyAI] Models ready.")
@@ -144,9 +145,6 @@ class JoyAIImageGenerate:
         vlm_quantization: str,
         input_image=None,
     ):
-        from infer_runtime.model import InferenceParams
-        from modules.utils import seed_everything
-
         vlm_bits = {"4-bit": 4, "8-bit": 8, "16-bit (full)": 16}[vlm_quantization]
 
         model = _get_model(high_vram=high_vram, vlm_bits=vlm_bits)

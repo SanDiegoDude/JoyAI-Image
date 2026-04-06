@@ -1,11 +1,18 @@
 """ComfyUI custom node — JoyAI Image Generate (local inference).
 
-Symlink or clone this folder into ComfyUI/custom_nodes/ to register the node.
+Copy this folder into ComfyUI/custom_nodes/ to register the node.
 Models are auto-downloaded from HuggingFace on first use.
 
-Requirements (in the ComfyUI venv):
-    pip install -e /path/to/JoyAI-Image
+Setup (in the ComfyUI venv):
+    cd /path/to/JoyAI-Image && pip install -e .
     pip install bitsandbytes
+
+Or to install directly from GitHub:
+    pip install git+https://github.com/SanDiegoDude/JoyAI-Image.git
+    pip install bitsandbytes
+
+Checkpoints are stored in ~/.cache/joyai-image/ckpts_infer/ by default.
+Override with the JOYAI_CKPT_ROOT environment variable.
 """
 
 from .nodes import JoyAIImageGenerate
