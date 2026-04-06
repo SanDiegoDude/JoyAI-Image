@@ -1,0 +1,13 @@
+accelerate
+bitsandbytes
+diffusers>=0.34.0
+einops
+huggingface_hub
+loguru
+packaging
+pillow
+safetensors
+sentencepiece
+torch
+torchvision
+transformers>=4.57.0,<4.58.0
