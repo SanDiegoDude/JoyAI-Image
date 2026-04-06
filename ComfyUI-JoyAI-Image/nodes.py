@@ -15,18 +15,20 @@ import numpy as np
 import torch
 from PIL import Image
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_JOYAI_ROOT = os.path.dirname(os.path.realpath(os.path.join(_THIS_DIR, "..")))
+_THIS_DIR = os.path.dirname(os.path.realpath(__file__))
+_JOYAI_ROOT = os.path.dirname(_THIS_DIR)
 _JOYAI_SRC = os.path.join(_JOYAI_ROOT, "src")
 
 if not os.path.isdir(_JOYAI_SRC):
-    _alt = os.path.dirname(os.path.realpath(_THIS_DIR))
-    if os.path.isdir(os.path.join(_alt, "src")):
-        _JOYAI_ROOT = _alt
-        _JOYAI_SRC = os.path.join(_alt, "src")
+    raise RuntimeError(
+        f"[JoyAI] Cannot find src/ directory. Expected at: {_JOYAI_SRC}\n"
+        f"  Resolved __file__ to: {os.path.realpath(__file__)}\n"
+        f"  Make sure ComfyUI-JoyAI-Image/ lives inside the JoyAI-Image repo root."
+    )
 
 if _JOYAI_SRC not in sys.path:
     sys.path.insert(0, _JOYAI_SRC)
+    print(f"[JoyAI] Added to sys.path: {_JOYAI_SRC}")
 
 _model = None
 _model_lock = threading.Lock()
