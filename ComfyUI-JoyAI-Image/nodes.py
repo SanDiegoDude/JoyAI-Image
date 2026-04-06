@@ -25,6 +25,9 @@ if not os.path.isdir(_JOYAI_SRC):
         _JOYAI_ROOT = _alt
         _JOYAI_SRC = os.path.join(_alt, "src")
 
+if _JOYAI_SRC not in sys.path:
+    sys.path.insert(0, _JOYAI_SRC)
+
 _model = None
 _model_lock = threading.Lock()
 _current_cfg_key = None
@@ -40,8 +43,6 @@ def _get_model(high_vram: bool, vlm_bits: int):
         if _model is not None and _current_cfg_key == cfg_key:
             return _model
 
-        if _JOYAI_SRC not in sys.path:
-            sys.path.insert(0, _JOYAI_SRC)
         warnings.filterwarnings("ignore")
 
         from infer_runtime.download import ensure_checkpoints
@@ -141,8 +142,6 @@ class JoyAIImageGenerate:
         vlm_quantization: str,
         input_image=None,
     ):
-        if _JOYAI_SRC not in sys.path:
-            sys.path.insert(0, _JOYAI_SRC)
         from infer_runtime.model import InferenceParams
         from modules.utils import seed_everything
 
