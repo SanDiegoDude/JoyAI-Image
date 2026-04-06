@@ -3,16 +3,14 @@
 Copy this folder into ComfyUI/custom_nodes/ to register the node.
 Models are auto-downloaded from HuggingFace on first use.
 
-Setup (in the ComfyUI venv):
-    cd /path/to/JoyAI-Image && pip install -e .
-    pip install bitsandbytes
+Setup:
+    1. export JOYAI_PATH=/path/to/JoyAI-Image
+    2. pip install bitsandbytes  (in your ComfyUI venv)
+    3. Copy this folder into ComfyUI/custom_nodes/
+    4. Restart ComfyUI
 
-Or to install directly from GitHub:
-    pip install git+https://github.com/SanDiegoDude/JoyAI-Image.git
-    pip install bitsandbytes
-
-Checkpoints are stored in ~/.cache/joyai-image/ckpts_infer/ by default.
-Override with the JOYAI_CKPT_ROOT environment variable.
+Checkpoints default to $JOYAI_PATH/ckpts_infer/ (your existing models).
+Override with JOYAI_CKPT_ROOT if they live elsewhere.
 """
 
 from .nodes import JoyAIImageGenerate

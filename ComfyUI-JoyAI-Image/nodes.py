@@ -4,18 +4,36 @@ Runs the JoyAI-Image pipeline directly inside the ComfyUI process.
 Models are downloaded automatically from HuggingFace on first use and
 kept in memory between runs.
 
-Install the JoyAI-Image package into your ComfyUI venv:
-    cd /path/to/JoyAI-Image && pip install -e .
+Setup:
+    1. Set env var JOYAI_PATH to your JoyAI-Image repo root, e.g.:
+           export JOYAI_PATH=/shared-big/JoyAI-Image
+    2. Copy this folder into ComfyUI/custom_nodes/
+    3. pip install bitsandbytes  (in your ComfyUI venv, if not already)
+    4. Restart ComfyUI
+
+Checkpoints default to $JOYAI_PATH/ckpts_infer/.
+Override with JOYAI_CKPT_ROOT env var if models are elsewhere.
 """
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import warnings
 
 import numpy as np
 import torch
 from PIL import Image
+
+_JOYAI_PATH = os.environ.get("JOYAI_PATH", "")
+
+if _JOYAI_PATH:
+    _src = os.path.join(_JOYAI_PATH, "src")
+    if os.path.isdir(_src) and _src not in sys.path:
+        sys.path.insert(0, _src)
+        print(f"[JoyAI] Using source from: {_src}")
+else:
+    print("[JoyAI] Warning: JOYAI_PATH not set. Trying system packages...")
 
 try:
     from infer_runtime.download import ensure_checkpoints
@@ -24,16 +42,17 @@ try:
     from modules.utils import seed_everything
 except ImportError as _exc:
     raise ImportError(
-        "\n[JoyAI] Required packages not found. Install the JoyAI-Image "
-        "package into your ComfyUI venv:\n"
-        "    cd /path/to/JoyAI-Image && pip install -e .\n"
-        "  (see ComfyUI-JoyAI-Image/requirements.txt for details)"
+        "\n[JoyAI] Cannot import JoyAI-Image packages.\n"
+        "  Set the JOYAI_PATH environment variable to your JoyAI-Image repo:\n"
+        "    export JOYAI_PATH=/path/to/JoyAI-Image\n"
+        "  Then restart ComfyUI."
     ) from _exc
 
-_CKPT_ROOT = os.environ.get(
-    "JOYAI_CKPT_ROOT",
-    os.path.join(os.path.expanduser("~"), ".cache", "joyai-image", "ckpts_infer"),
-)
+_CKPT_ROOT = os.environ.get("JOYAI_CKPT_ROOT", "")
+if not _CKPT_ROOT and _JOYAI_PATH:
+    _CKPT_ROOT = os.path.join(_JOYAI_PATH, "ckpts_infer")
+if not _CKPT_ROOT:
+    _CKPT_ROOT = os.path.join(os.path.expanduser("~"), ".cache", "joyai-image", "ckpts_infer")
 
 _model = None
 _model_lock = threading.Lock()

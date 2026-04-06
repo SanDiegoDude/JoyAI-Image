@@ -1,19 +1,8 @@
-# JoyAI-Image package (provides the inference runtime)
-# Install from the repo into your ComfyUI venv:
-#   cd /path/to/JoyAI-Image && pip install -e .
-#
-# Or install directly from GitHub:
-#   pip install git+https://github.com/SanDiegoDude/JoyAI-Image.git
-
-# Additional dependency not bundled in the base package:
+# The only extra dependency likely missing from a ComfyUI env:
 bitsandbytes
 
-# Usually already installed by ComfyUI — uncomment if missing:
-# accelerate
-# einops
-# pillow
-# safetensors
-
-# PyTorch — almost certainly already in your ComfyUI env.
-# If not, install the CUDA version for your driver:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Everything else is handled by setting JOYAI_PATH to your
+# JoyAI-Image repo root. No pip install of the main package needed.
+#
+# Example (add to your shell profile or ComfyUI launch script):
+#   export JOYAI_PATH=/path/to/JoyAI-Image
